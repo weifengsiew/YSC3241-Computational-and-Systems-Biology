@@ -1,0 +1,227 @@
+---
+title: "ProblemSet8"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Problem Set 8
+
+For this problem set we will be working with the dataset that we have been analysing in the RNA-seq portion of this class. 
+
+```{r}
+library(DESeq2)
+library(GenomicFeatures)
+library(biomaRt)
+```
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-8") #set working directory 
+
+read_counts = read.delim("counts.txt", sep="\t", comment.char="#", row.names=1)
+
+experimental.metadata = read.table("sampledata.txt", stringsAsFactors=FALSE, sep="\t", header=TRUE)
+
+experimental.metadata$condition = factor(experimental.metadata$condition,
+                             levels=c("mN","mP", "mT")) #restructure data
+```
+ 
+```{r}
+getwd() #get working directory 
+setwd("../data/shared") #set working directory 
+mm.gtf.db <- makeTxDbFromGFF("Mus_musculus.GRCm39.109.chr.gtf", format="gtf" )
+
+
+ensembl.genes = genes(mm.gtf.db)
+gene_annotations <- rtracklayer::import("Mus_musculus.GRCm39.109.chr.gtf")
+gene_annotations <- gene_annotations[gene_annotations$type == "gene"]
+gene_metadata <- unique(as.data.frame(mcols(gene_annotations))[, c("gene_id", "gene_name", "gene_biotype")])
+ensembl.genes$mgi_symbol = gene_metadata$gene_name[ match(ensembl.genes$gene_id, gene_metadata$gene_id) ]
+ensembl.genes$gene_biotype = gene_metadata$gene_biotype[ match(ensembl.genes$gene_id, gene_metadata$gene_id) ]
+ensembl.genes$status = NA
+ensembl.genes$description = NA
+ensembl.genes$entrezgene = NA
+```
+ 
+## Question 1:
+
+### Question 1a:
+__Lets play with TPMs. Load in the read_counts from this experiment and remove all rRNAs, mt_rRNAs, the gene Rn7sk and all of the genes that are located on the mitochondrial chromosome. We're doing this because these genes are sucking up a lot of reads in this dataset. Then recalculate the TPMs for all genes across all samples (1 mark)__ 
+
+```{r}
+genes_to_remove = names(ensembl.genes[ensembl.genes$mgi_symbol %in% "Rn7sk" | seqnames(ensembl.genes) == "chrM" | ensembl.genes$gene_biotype %in% c("Mt_rRNA", "rRNA" )])
+
+read_counts = read_counts[ !(row.names(read_counts) %in% genes_to_remove),]
+```
+
+```{r}
+ncscalingfactor = colSums(read_counts) / 1e6
+
+mm.exons = exonsBy(mm.gtf.db, "gene")
+mm.exons = reduce(mm.exons)
+mm.lengths = sapply(mm.exons, function(x){sum(width(x))})
+
+gene_lengths = mm.lengths / 1000 
+rpk = read_counts / gene_lengths[row.names(read_counts)]
+ncscalingfactor = colSums(rpk) / 1e6
+tpm = sweep(rpk, 2, ncscalingfactor, "/")
+```
+
+```{r}
+colSums(tpm)
+```
+
+```{r}
+head(tpm)
+```
+
+### Question 1b:
+
+__How many genes are expressed more than 1 TPM in at least one sample__ 
+(1 mark)
+
+```{r}
+more_than_1_tpm= c()
+
+for (rowname in rownames(tpm)){
+  if (sum(tpm[rowname,] > 1) > 0 ){
+    more_than_1_tpm = c(more_than_1_tpm, rowname)}
+  else {}}
+```
+
+```{r}
+print(paste(length(more_than_1_tpm), "genes are expressed more than 1 TPM in at least one sample"))
+```
+
+### Question 1c:
+
+__Using only those genes which are expressed more than 1 TPM in at least one sample... for each sample identify which gene is closest to the median TPM for that sample.__ (1 mark)
+
+```{r}
+read_counts_more_than_1_tpm = read_counts[more_than_1_tpm,]
+```
+
+```{r}
+for (colname in colnames(read_counts_more_than_1_tpm)){
+  median_tpm <- median(read_counts_more_than_1_tpm[,colname])
+  absolute_differences_from_median_tpm <- abs(read_counts_more_than_1_tpm[,colname] - median_tpm)
+  minimum_absolute_difference_from_median_tpm <- min(absolute_differences_from_median_tpm)
+  gene_closest_to_median_tpm <- rownames(read_counts_more_than_1_tpm[absolute_differences_from_median_tpm == minimum_absolute_difference_from_median_tpm,])
+  
+  print(paste("genes closest to the median TPM for sample", colname))
+  print(gene_closest_to_median_tpm )
+}
+```
+
+### Question 1d:
+
+__Plot a boxplot showing the expression of Kras (in TPM) in the three conditions.__(1 mark)
+
+```{r}
+mN<- unlist(read_counts[names(ensembl.genes[ensembl.genes$mgi_symbol %in% "Kras",]),])[c("mN11","mN12","mN13","mN5","mN6",
+                                                                                 "mN7")]
+mT<- unlist(read_counts[names(ensembl.genes[ensembl.genes$mgi_symbol %in% "Kras",]),])[c("mT3", "mT4", "mT5", "mT7", "mT8", "mT9")]
+mP<- unlist(read_counts[names(ensembl.genes[ensembl.genes$mgi_symbol %in% "Kras",]),])[c("mP1", "mP2", "mP3", "mP4", "mP5", "mP6")]
+
+par(mfrow= c(1,3))
+boxplot(mN, main= "Expression level of Kras in mN", ylim= c(1000,2400), ylab= "Expression level (TPM)")
+grid()
+boxplot(mT, main= "Expression level of Kras in mT", ylim= c(1000,2400))
+grid()
+boxplot(mP, main= "Expression level of Kras in mP", ylim= c(1000,2400))
+grid()
+```
+## Question 2:
+
+There are lots of ways to compare biological replicates.
+
+### Question 2a:
+
+__Write a loop that will generate pairwise scatterplots for all replicates within a condition, i.e. plot compare all replicates from the same condition against each other. By normalised counts I mean counts(dds, normalised=TRUE) .. one way is to plot the log10(normalised counts + 1) for one replicate against another.__ (1 marks)
+
+```{r}
+dds <- DESeqDataSetFromMatrix(read_counts, experimental.metadata, ~ condition)
+dds <- estimateSizeFactors(dds) 
+dds <- estimateDispersions(dds)
+```
+```{r}
+mN_replicates <- c("mN11","mN12","mN13","mN5","mN6","mN7")
+
+par(mfrow= c(3,2))
+for (one_replicate in mN_replicates){
+  replicate1 <- log10(counts(dds, normalized=TRUE) + 1)[,one_replicate]
+  for (another_replicate in mN_replicates){
+    replicate2 <- log10(counts(dds, normalized=TRUE) + 1)[,another_replicate]
+    plot(replicate1, replicate2, main= paste(another_replicate, "against", one_replicate), ylab= "log10 (normalized counts + 1)", xlab= "log10 (normalized counts + 1)")}}
+```
+
+## Question 2b
+
+__Instead of using log10(x+1), plot the counts generated using the rlog function (again comparing all replicates from a specific condition)?__(1 marks)
+
+```{r}
+rld <- rlog(dds)
+rld <- assay(rld)
+
+mN_replicates <- c("mN11","mN12","mN13","mN5","mN6","mN7")
+
+par(mfrow= c(3,2))
+for (one_replicate in mN_replicates){
+  replicate1 <- rld[,one_replicate]
+  for (another_replicate in mN_replicates){
+    replicate2 <- rld[,another_replicate]
+    plot(replicate1, replicate2, main= paste(another_replicate, "against", one_replicate), ylab= "normalized counts", xlab= "normalized counts")}}
+```
+
+
+__How are the two plots different .. and why?__ ( 1 marks )
+
+By eye, there is way more heteroskedasticity (i.e. the plot thickens more) in the first plot, as compared to in the second plot. 
+
+This is because rlog "transforms the count data to the log2 scale in a way which minimizes differences between samples for rows with small counts, and which normalizes with respect to library size", which is not the case with log10(x+1). 
+
+## Question 2c
+
+__MA plots are incredibly powerful in comparing samples against each other, using the results from counts(dds, normalized=TRUE) plot MA plots for each pair of replicates within a condition__(2 marks)
+
+```{r}
+dds <- DESeqDataSetFromMatrix(read_counts, experimental.metadata, ~ condition)
+dds <- estimateSizeFactors(dds) 
+dds <- estimateDispersions(dds)
+```
+
+```{r}
+mN_replicates <- c("mN11","mN12","mN13","mN5","mN6","mN7")
+
+par(mfrow= c(2,2))
+for (one_replicate in mN_replicates){
+  replicate1 <- counts(dds, normalized=TRUE)[,one_replicate] 
+  for (another_replicate in mN_replicates){
+    if (one_replicate != another_replicate){
+    replicate2 <- counts(dds, normalized=TRUE)[,another_replicate] 
+    M= log2(replicate1/ replicate2)
+    A= 0.5*log2(replicate1 * replicate2)
+    plot(A,
+         M, 
+         main= paste("MA plot:", one_replicate, "vs", another_replicate),
+         ylab= paste("log2 (counts in", one_replicate," / counts in", another_replicate, ")"),
+         xlab= paste("0.5 * log2 (counts in", one_replicate," * counts in", another_replicate, ")") 
+         )
+    }
+    else{}
+  }
+  }
+```
+
+
+__What does an MA plot show? How does it work / what does it show / how can you interpret this?__(1 mark)
+
+The MA plot is basically plotting log2(normalized counts in sample A / normalized counts in sample B)
+against 0.5 * log2(normalized counts in sample A * normalized counts in sample B), where each point on the plot corresponds to a single gene. The more positive the y axis coordinate of a point is, the more highly the gene corresponding to it is expressed on average in the two samples A and B. The closer the x axis coordinate of a point is to 0, the less different the gene expression is between the two samples A and B. However, this difference does not refer to statistical significance. If the x axis coordinate of a point is positive, then the gene is more highly expressed in sample A relative to sample B. If the x axis coordinate of a point is negative, then the gene is expressed less in sample A relative to sample B. 
+
+```{r}
+sessionInfo()
+```

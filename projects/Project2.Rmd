@@ -1,0 +1,1086 @@
+---
+title: "Project2"
+author: "Siew Wei Feng"
+date: "2023-05-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project 2 - Multi-scale 3D genome rewiring during mouse neural development
+
+This project is looking at analysing a dataset from the following paper ... 
+
+Bonev B, Mendelson Cohen N, Szabo Q, Fritsch L et al. Multiscale 3D Genome Rewiring during Mouse Neural Development. Cell 2017 Oct 19;171(3):557-572.e24. PMID: 29053968
+
+.... where they investigated changes in transcription, epigenetics and chromatin organisation during neuronal differentiation. Three different timepoints were taken - ES (embryonic stem cells), NPC (neural progenitor cells) and finally CN (cortical neurons). They performed RNA-seq on these samples with 2 replicates per condition. 
+
+I have aligned and quantified these RNA-seq datasets - the results of which are in neuronaldifferentiation.tsv, and have information linking the samplenames to conditions in sampledata.txt. 
+
+For this project you need to run the majority of steps of an RNA-seq analysis ... 
+
+1. QC 
+2. Differential Expression 
+3. Clustering
+4. Visualisation
+5. Enrichment analysis
+
+All of the code should be in the various markdown files from the RNA-seq portion of the course - you should be able to integrate and edit this code to help you perform each of these tasks. If you want you can add/reorder steps/headings as needed/required. 
+
+However, the important thing is to make sure you tell me what you are doing and why? For example, why did you pick K=some number for clustering? what is the PCA plot showing? why have you visualised the data like this? The marks are allocated based on if you show understanding of the concepts, visualisations and results generated during an RNA-seq analysis.
+
+## An overview
+
+1. Quality control (QC) 
+* Correction of experimental metadata
+* Removal of data related to rRNA
+* Removal of data related to genes whose expression were not detected
+* Inspection of p-value histogram and removal of data related to genes with low read counts
+* Inspection of MA plots for replicates within same condition
+* Inspection of the principal components
+
+2. Normalization of read counts
+
+3. Differential expression (DE) analysis
+* NPC vs ES
+* CN vs NPC
+* CN vs ES
+
+4. MA plots and volcano plots for DE results
+* NPC vs ES
+* CN vs NPC
+* CN vs ES
+
+5. K-means clustering
+* Using elbow method to choose k for k-means clustering 
+* Using silhouette method to choose k for k-means clustering
+* K-means clustering with k=4
+
+6. Heatmap for DE results
+
+7. Enrichment analysis
+* Cluster 1: Immune response and inhibition of differentiation
+* Cluster 2: Neurotransmission and regulation of neurotransmission 
+* Cluster 3: Development of central nervous system
+* Cluster 4: Cell cycle
+
+## Quality control (QC) 
+
+### QC: Correction of experimental metadata
+
+```{r}
+library(DESeq2)
+library(GenomicFeatures)
+library(biomaRt)
+```
+
+First, we load neuronaldifferentiation.tsv in a data frame format.
+```{r}
+project_2_read_counts = read.delim("../data/project-2/neuronaldifferentiation.tsv", row.names=1)
+```
+
+We look at the data frame, and notice that while each row corresponds to a single gene, each column corresponds to a single sample. 
+ES stands for embryonic stem cells, NPC stands for neural progenitor cells and CN stands for cortical neurons, from the least to the most differentiated.
+```{r}
+head(project_2_read_counts)
+```
+
+Next, we load sampledata_project2.txt, which provides us with the experimental metadata, in a data frame format.
+```{r}
+getwd() #get working directory 
+setwd("../data/project-2") #set working directory 
+project_2_experimental_metadata = read.table("sampledata_project2.txt", stringsAsFactors=FALSE, sep="\t", header=TRUE)
+```
+We notice that there is something very wrong with the experimental metadata. For each condition, there are two replicates. Yet,
+in the experimental data, the two replicates for each conditions are given the same samplename. 
+```{r}
+project_2_experimental_metadata
+```
+Hence, we assign the correct values to the samplename column. Moreover, we change the type of the samplename column vector from
+ <chr> to <fctr>.
+```{r}
+project_2_experimental_metadata$samplename <- factor(colnames(project_2_read_counts),
+                             levels=c("ES_1","ES_2", "NPC_1", "NPC_2", "CN_1", "CN_2"))
+```
+
+We also change the type of the samplename column vector from <chr> to <fctr>.
+```{r}
+project_2_experimental_metadata$condition = factor(project_2_experimental_metadata$condition,
+                             levels=c("ES","NPC", "CN")) 
+```
+
+We take one more look at the experimental metadata data frame, and we are satisfied with it, hence moving on to the next step. 
+```{r}
+project_2_experimental_metadata
+```
+### QC: Removal of data related to RNA 
+
+Now, we remove from project_2_read_counts the rows corresponding to genes with biotype Mt_rRNA and rRNA. This is because we are not interested in studying rRNA, we are only interested in studying mRNA. Yet, rRNA typically constitutes over 90% of total rRNA in cells, and may not be fully removed by ribosomal depletion, hence requiring this step of removing the row corresponding to genes that code for rRNA, so that we do not waste computational resources on rRNA in our analysis further downstream.
+
+```{r, cache=TRUE}
+getwd() 
+setwd("../data/shared") 
+mm.gtf.db = makeTxDbFromGFF("Mus_musculus.GRCm39.109.chr.gtf", format="gtf" )
+
+ensembl.genes = genes(mm.gtf.db)
+gene_annotations <- rtracklayer::import("Mus_musculus.GRCm39.109.chr.gtf")
+gene_annotations <- gene_annotations[gene_annotations$type == "gene"]
+gene_metadata <- unique(as.data.frame(mcols(gene_annotations))[, c("gene_id", "gene_name", "gene_biotype")])
+ensembl.genes$mgi_symbol = gene_metadata$gene_name[ match(ensembl.genes$gene_id, gene_metadata$gene_id) ]
+ensembl.genes$gene_biotype = gene_metadata$gene_biotype[ match(ensembl.genes$gene_id, gene_metadata$gene_id) ]
+ensembl.genes$status = NA
+ensembl.genes$description = NA
+ensembl.genes$entrezgene = NA
+```
+The table below shows the perctenage of RNA which are rRNA in each sample.  
+```{r}
+rrna = names(ensembl.genes[ensembl.genes$gene_biotype %in% c("Mt_rRNA", "rRNA" )])
+total.rrna = colSums(project_2_read_counts[ row.names(project_2_read_counts) %in% rrna,])
+100 * (total.rrna / colSums(project_2_read_counts))
+```
+The barplot below visualizes the percentage of RNA which are rRNA in each sample. We see that rRNA has not been completely removed through ribosomal depletion.
+```{r}
+barplot(100 * (total.rrna / colSums(project_2_read_counts)), ylab="%rRNA/mtRNA", las=2, cex.names=0.8)
+```
+
+Since we are only interested in mRNA, and we are not interested in rRNA, we remove the data related to rRNA, so as to not waste computational resources later in our analysis.
+```{r}
+project_2_read_counts = project_2_read_counts[ !(row.names(project_2_read_counts) %in% rrna),]
+```
+
+We confirm that we have removed the data related to rRNA. 
+```{r}
+rrna = names(ensembl.genes[ensembl.genes$gene_biotype %in% c("Mt_rRNA", "rRNA" )])
+total.rrna = colSums(project_2_read_counts[ row.names(project_2_read_counts) %in% rrna,])
+100 * (total.rrna / colSums(project_2_read_counts))
+```
+
+### QC: Removal of data related to genes whose expression are not detected
+
+Next, we remove from project_2_read_counts, the rows corresponding to the genes whose expression are not detected in any sample. This is because we are interested in finding out which genes are differentially expressed across different conditions, but we cannot do so if gene expression is not detected in the first place.
+
+```{r}
+project_2_read_counts = project_2_read_counts [apply(project_2_read_counts, 1, function(row) any(row > 0 )),]
+```
+
+```{r}
+head(project_2_read_counts)
+```
+
+### QC: Inspection of p-value histogram and removal of data related to genes with low read counts
+
+Ever vigilant, we take a look at the p-value histogram. 
+
+```{r}
+dds_qc = DESeqDataSetFromMatrix(project_2_read_counts, project_2_experimental_metadata, ~ condition)
+dds_qc = estimateSizeFactors(dds_qc) 
+dds_qc = estimateDispersions(dds_qc)
+```
+Suppose that the null hypothesis is true for all tests. This implies that there is a 5% chance of the p-value being less than 0.05, a 10% chance of the p-value being less than 0.1, so on and so forth, which yields a uniform distribution, as shown in the histogram below. Suppose we set the significance level to be 0.05. In some tests, the p-value will be less than 0.05, causing the true null hypothesis to be rejected incorrectly, which is known as a type I error. The left of the blue line represents tests in which the true null hypothesis is rejected incorrectly (type I error), while those on the right of the blue line represents tests in which the true null hypothesis is correctly not rejected.
+
+```{r}
+result_null_true = c()
+for(i in 1:20000){
+  x = rnorm(100, 0, 1)
+  y = rnorm(100, 0, 1)
+  result_null_true = c(result_null_true, t.test(x,y)$p.value)
+}
+
+hist(result_null_true, xlab="pvalue")
+abline(v = 0.05, col = "blue", lwd = 3)
+```
+
+Suppose that the null hypothesis is false in all tests. We would expect the p-values in the tests to tend towards 0, as shown in the histogram below. Suppose we set the significance level to be 0.05. In some tests, p-values will be less than 0.05, causing the false null hypothesis to be rejected correctly. As shown in the histogram below, results on the left of the blue line represent tests in which the false null hypothesis is rejected correctly, while those on the right of the blue line represents tests in which the false null hypothesis is incorrectly not rejected (type II error
+). 
+
+```{r}
+result_null_false =c()
+for( i in 1:10000 ) { 
+    x = rnorm(10, 0, 1)
+    y = rnorm(10, 1.5, 1)
+    result_null_false = c(result_null_false, t.test(x,y)$p.value)
+}
+hist(result_null_false, xlab="pvalue")
+abline(v = 0.05, col = "blue", lwd = 3)
+```
+
+For this data set, we expect the null hypothesis to be true for some tests (i.e. some genes are not differentially expressed across conditions) and to be false for some tests (i.e. some genes are indeed differentially expressed across conditions). Hence, we would expect our p-value histogram to look like this. The left of the blue line represents a mixture of tests in which the false null hypothesis is rejected correctly and tests in which the true null hypothesis is rejected incorrectly. The right of the blue line represents a mixture of tests in which the false null hypothesis is incorrectly not rejected and tests in which the true null hypothesis is correctly not rejected.
+
+```{r}
+hist(c(result_null_false, result_null_true), xlab="pvalue")
+abline(v = 0.05, col = "blue", lwd = 3)
+```
+
+However, what we get are histograms looking like this. As per what we expect, we see a peak close to 0 on the x axis (p-values close to 0). However, we also see another peak close to 1 on the x axis (p-values close to 1). This peak close to 1 on the x axis can be attributed to genes with low read counts, which tend to result in large p-values. Hence, we need to remove the rows in the data frame which correspond to genes with low read counts. 
+
+```{r}
+dds_qc = nbinomLRT(dds_qc, full= ~1 + condition, reduced = ~ 1)
+results.lrt = results(dds_qc, independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH")
+NPC_vs_ES= results(dds_qc, contrast=c("condition", "NPC", "ES"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH", test="Wald")
+CN_vs_NPC = results(dds_qc, contrast=c("condition", "CN", "NPC"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH", test="Wald")
+CN_vs_ES = results(dds_qc, contrast=c("condition", "CN", "ES"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH",test="Wald")
+```
+
+```{r}
+par(mfrow= c(1,3))
+hist(NPC_vs_ES$pvalue) 
+hist(CN_vs_NPC$pvalue) 
+hist(CN_vs_ES$pvalue) 
+```
+
+In this step, we remove the genes with low read-counts. Later in the analysis, we will show the p-value histogram once again (one that we are satisfied with).
+
+```{r}
+filter = apply(counts(dds_qc, normalized=TRUE), 1, function(x){ mean(x) >= 10 })
+dds_qc = DESeqDataSetFromMatrix(project_2_read_counts, project_2_experimental_metadata, ~ condition)
+dds_qc = dds_qc[filter, ]
+```
+
+
+## Normalization of read counts
+
+To account for sequencing depth and RNA composition, the function estimateSizeFactors is used to generate size factors, so as to perform the medians of ratios method of normalization.
+```{r}
+dds_qc = estimateSizeFactors(dds_qc) 
+```
+
+To estimate what the dispersions are for each gene, the function estimateDispersions is used. To improve the estimate for each gene, information is borrowed from other genes that are expressed at a similar level.
+```{r}
+dds_qc = estimateDispersions(dds_qc)
+```
+
+## Quality control (QC) 
+
+### QC: Inspection of MA plots for replicates within same condition
+
+Apart from looking at the p-value histogram, we are also interested in looking at MA plots for each pair of replicates within a condition. Looking at the MA plot with the y-axis showing log2(counts in ES_1/counts in ES_2), there is a skew of the data in the positive direction on the y-axis. We can see that there are a greater number of genes whose expression increase substantially from ES_2 to ES_1 (i.e. log2(counts in ES_1/counts in ES_2) > 5), as compared to genes whose expression decrease substantially from ES_2 to ES_1 (i.e. log2(counts in ES_1/counts in ES_2) < - 5).
+
+```{r}
+replicate1 <- "ES_1"
+replicate2 <- "ES_2"
+replicate1_counts <- counts(dds_qc, normalized=TRUE)[,replicate1] 
+replicate2_counts <- counts(dds_qc, normalized=TRUE)[,replicate2] 
+M= log2(replicate1_counts/ replicate2_counts)
+M= M[is.finite(M)]
+A= 0.5*log2(replicate1_counts*replicate2_counts)
+A= A[is.finite(A)]
+plot(A,
+     M, 
+     main= paste("MA plot:", replicate1, "vs", replicate2),
+     ylab= paste("log2 (counts in", replicate1," / counts in", replicate2, ")"),
+     xlab= paste("0.5 * log2 (counts in", replicate1," * counts in", replicate2, ")"),
+     ylim= c(min(M),max(M)),
+     xlim= c(min(A),max(A)))
+
+lines(lowess(A,M), col= "red")
+
+abline(h= 0, col = "blue", lwd = 3)
+abline(h= 5, col = "blue", lwd = 3)
+abline(h=-5, col = "blue", lwd = 3)
+
+log2_ES1_over_ES2= M
+```
+
+Indeed, the distribution of log2(counts in ES_1/counts in ES_2 is positively skewed, as revealed by the measure of skewness shown below. 
+```{r}
+library(moments)
+```
+
+```{r}
+skewness(log2_ES1_over_ES2)
+```
+A majority of genes should have roughly similar expression levels across both samples (ES_1 and ES_2), hence the average difference in gene expression should roughly be zero, regardless of average expression level. We see that the lowess curve (in red) is very close to the horizontal line  log2(counts in ES_1/counts in ES_2)  = 0 (in blue), showing that log2 fold change values are roughly scattered around zero, indicating that the data was normalized satisfactorily.
+
+Looking at the MA plot with the y-axis showing log2(counts in NPC_1/counts in NPC_2), there is a skew of the data in the positive direction on the y-axis. We can see that there is a greater number of genes whose expression increase substantially from NPC_2 to NPC_1 (i.e. log2(counts in NPC_1/counts in NPC_2) > 5), as compared to genes whose expression decrease substantially from NPC_2 to NPC_1 (i.e. log2(counts in NPC_1/counts in NPC_2) < -5).
+
+```{r}
+replicate1 <- "NPC_1"
+replicate2 <- "NPC_2"
+replicate1_counts <- counts(dds_qc, normalized=TRUE)[,replicate1] 
+replicate2_counts <- counts(dds_qc, normalized=TRUE)[,replicate2] 
+M= log2(replicate1_counts/ replicate2_counts)
+M= M[is.finite(M)]
+A= 0.5*log2(replicate1_counts*replicate2_counts)
+A= A[is.finite(A)]
+plot(A,
+     M, 
+     main= paste("MA plot:", replicate1, "vs", replicate2),
+     ylab= paste("log2 (counts in", replicate1," / counts in", replicate2, ")"),
+     xlab= paste("0.5 * log2 (counts in", replicate1," * counts in", replicate2, ")"),
+     ylim= c(min(M),max(M)),
+     xlim= c(min(A),max(A)))
+lines(lowess(A,M), col= "red")
+abline(h=0, col = "blue", lwd = 3)
+abline(h= 5, col = "blue", lwd = 3)
+abline(h=-5, col = "blue", lwd = 3)
+
+log2_NPC1_over_NPC2 = M
+```
+
+Indeed, the distribution of log2(counts in NPC_1/counts in NPC_2 is positively skewed, as revealed by the measure of skewness shown below. 
+
+```{r}
+skewness(log2_NPC1_over_NPC2)
+```
+A majority of genes should have roughly similar expression levels across both samples (NPC_1 and NPC_2), hence the average difference in gene expression should roughly be zero, regardless of average expression level. We see that the lowess curve (in red) is very close to the horizontal line log2(counts in NPC_1/counts in NPC_2) = 0 (in blue), showing that log2 fold change values are roughly scattered around zero, indicating that the data was normalized satisfactorily.
+
+Looking at the MA plot with the y-axis showing log2(counts in CN_1/counts in CN_2), the data does not seem obviously skewed in any direction with regard to the y-axis.
+
+```{r}
+replicate1 <- "CN_1"
+replicate2 <- "CN_2"
+replicate1_counts <- counts(dds_qc, normalized=TRUE)[,replicate1] 
+replicate2_counts <- counts(dds_qc, normalized=TRUE)[,replicate2] 
+M= log2(replicate1_counts/ replicate2_counts)
+M= M[is.finite(M)]
+A= 0.5*log2(replicate1_counts*replicate2_counts)
+A= A[is.finite(A)]
+plot(A,
+     M, 
+     main= paste("MA plot:", replicate1, "vs", replicate2),
+     ylab= paste("log2 (counts in", replicate1," / counts in", replicate2, ")"),
+     xlab= paste("0.5 * log2 (counts in", replicate1," * counts in", replicate2, ")"),
+     ylim= c(min(M),max(M)),
+     xlim= c(min(A),max(A)))
+
+lines(lowess(A,M), col= "red")
+abline(h=0, col = "blue", lwd = 3)
+abline(h= 5, col = "blue", lwd = 3)
+abline(h=-5, col = "blue", lwd = 3)
+
+log2_CN1_over_CN2 = M
+```
+
+Indeed, the distribution of log2(counts in CN_1/counts in CN_2) is only very slightly negatively skewed (skewness = -0.05946851), as compared to the much more substantial skew in the distribution of log2(counts in NPC_1/counts in NPC_2) (skewness = 1.418564) and  log2(counts in NPC_1/counts in NPC_2) (skewness = 1.204142). 
+
+```{r}
+skewness(log2_CN1_over_CN2)
+```
+A majority of genes should have roughly similar expression levels across both samples (CN_1 and CN_2), hence the average difference in gene expression should roughly be zero, regardless of average expression level. We see that the lowess curve (in red) is very close to the horizontal line log2(counts in CN_1/counts in CN_2) = 0 (in blue), showing that log2 fold change values are roughly scattered around zero, indicating that the data was normalized satisfactorily.
+
+### QC: Inspection of the principal components
+
+Apart from MA plots, we are also interested in carrying out principal component analysis, so as to understand the percentage of variation in the data which is explained by various factors. We want most of the variation in the data to be explained in terms of differences in condition, in order to be satisfied with the quality of the data. Now, we carry out principal component analysis.
+
+```{r}
+rld = rlog(dds_qc)
+data = plotPCA(rld, intgroup = c( "condition"), returnData=TRUE)
+ntop = 500
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[1:ntop]
+pca = prcomp(t(assay(rld)[select,]))
+```
+
+We take a look at the first principal component. In the first principal component, this are how the samplenames are ranked in terms of their loading (from most positive to the most negative): CN_1, CN_2, NPC_2, NPC_1, ES_2, ES_1. CN (cortical neurons) are most differentiated, followed by NPC (neural progenitor cells) and ES (embryonic stem cells), which are the least differentiated. From this, we can infer from this that the first principal component roughly corresponds to the extent of cell differentiation which characterizes the condition.
+
+```{r}
+barplot(pca$x[,"PC1"])
+```
+
+We can also visualize the value of the loading for each samplename in the first principal component using the plot below, where the blue dots correspond to the condition CN, the green dots correspond to the condition NPC, and the red dots correspond to the condition ES. Indeed, we see that samplenames which correspond to a greater extent of differentiation have more positive loading values. 
+
+```{r}
+plotPCA(rld, intgroup = c("condition"))
+```
+
+This plot is the same as the plot above, except that the dots are coloured based on samplename.
+
+```{r}
+plotPCA(rld, intgroup = c("samplename"))
+```
+
+Moreover, notice that the loading values for NPC and CN are closer to one another, as compared to the loading values for ES and NPC. This indicates while the pattern of gene expression is vastly changed from ES to NPC, the change is much smaller from ES to NPC. 
+
+What about the second principal component? What does the second principal component correspond to?
+
+```{r}
+df <- data.frame(total_count= colSums(project_2_read_counts), second_pca_loading= pca$x[,"PC2"], samplename= c("ES_1", "ES_2", "NPC_1", "NPC_2", "CN_1", "CN_2"))
+```
+
+First of all, notice that as the total read counts in the sample increases, the loading value corresponding to that sample increases (i.e. they have a positive correlation). Moreover, their relationship seems rather linear. 
+```{r}
+plot(second_pca_loading ~ total_count, data= df, col= factor(df$samplename))
+abline(lm(second_pca_loading ~ total_count, data= df))
+legend("topleft",
+       legend = levels(factor(df$samplename)),
+       pch =19,
+       col = factor(levels(factor(df$samplename))),
+       title = "samplename")
+```
+Hence, we can infer that the second principal component roughly corresponds to total read counts per sample.
+
+Now, we are interested in finding out: how many percent of the variation is explained by each of the six principal components? We can visualize this using a barplot as shown below.
+
+```{r}
+percentVar <- 100* pca$sdev^2/sum(pca$sdev^2)
+barplot(percentVar, names=1:length(percentVar), xlab="PC", ylab="% variation",  las=2, cex.names=0.8, ylim=c(0,100))
+```
+
+It appears that the first principal component explains 73.08897% of the variation in the data. This means that it is
+possible to obtain a pretty accurate summary of the data using just one dimension. As mentioned before, the first principal component roughly corresponds to the extent of cell differentiation which characterizes the condition. This suggests that most of the variation in the data can be explained in terms of the extent of cell differentiation.
+
+```{r}
+percentVar[1]
+```
+
+Meanwhile, the second principal component explains 16.26287% of the variation in the data. As mentioned before, the second principal component can be accounted for in terms of the total read counts per sample. This suggests that this variation in the data can be explained in terms of the total read counts per sample.
+
+```{r}
+percentVar[2]
+```
+Most importantly, since most of the variation in the data can be explained in terms of differences in condition, we are satisfied with the quality of the data and move on to the next step. 
+
+## A recap
+
+To recap, we have removed data regarding the genes with biotype Mt_rRNA and rRNA and the genes whose expression are not detected in any sample. We have also looked at the p-value histograms. After removing data regarding the genes with low read counts, we obtain satisfactory p-value histograms (which we will see later). We have also looked at MA plots comparing replicates within the same conditions. We have also carried out principal component analysis, and we are satisfied because differences in condition account for most of the variation in the data. Carrying out the above steps assures us of the quality of the data, allowing us to move on to the next step, where we carry out differential expression analysis and visualize the results.
+
+
+## Differential expression (DE) analysis
+
+After which, using nbinomLRT, we carry out a likelihood ratio test that compares two models for the count data: 1 + condition and 1. This allows us to identify genes that are better explained by the first model than the second model. 
+
+Notice that we are using a negative binomial model. Why is this so? First of all, the negative binomial is a distribution that is concentrated on the nonnegative integers, thus making it suitable for count data, which are non negative. Secondly, the negative binomial distribution has a non negative dispersion parameter, so that the variance need not be equal to the mean, and can in fact exceed the mean. Hence, we use the negative binomial distribution because, due to biological noise, the variability of read counts in sequencing experiments tend to be larger than the mean, and the nonnegative dispersion parameter allows for such overdispersion.
+
+```{r}
+dds_qc = nbinomLRT(dds_qc, full= ~1 + condition, reduced = ~ 1)
+```
+
+Using the results function, we compute the following for NPC vs ES, CN vs NPC and CN vs ES: the log2FoldChange and the adjusted p value associated with it. We choose to carry out the above comparisons because of the chronological progression from ES to NPC, then NPC to CN.
+
+Note that when using the results function, we set contrast = c("condition", "level_to_compare", "base_level"), meaning that we are computing the fold change from the base_level to the level_to_compare.
+
+We set test = "Wald", because for each gene, we would like to test whether the fold change from the base_level to the level_to_compare is equal to zero or not. 
+
+Null hypothesis: the fold change from the base_level to the level_to_compare is equal to zero (i.e. there is no difference in the expression of this gene between base_level and level_to_compare). 
+
+Alternative hypothesis: the fold change from the base_level to the level_to_compare is not equal to zero (i.e. there is a difference in the expression of this gene between base_level and level_to_compare).
+
+We also want to correct for multiple testing. If we use the p-value directly from the Wald test, with a significance cut-off of p < alpha, then the probability of a false positive is alpha. The p-value mentioned above is the result of a single test, for a single gene. In this analysis, we are applying hypothesis testing to many hypotheses, with one test per gene, which greatly increases the false positive rate, resulting in the multiple testing problem.
+
+In order to correct for multiple testing, we do the following:
+
+By setting pAdjustMethod = "BH", we calculate the adjusted p-values using the Benjamin and Hochberg (BH) procedure, which controls for the false discovery rate. The BH procedure consists of arranging the p-values in ascending order, and then dividing each of the p-value by its percentile rank, so as to get the estimated false discovery rate (FDR). 
+
+By setting alpha = 0.05, we use 0.05 as the adjusted p-value cutoff (false discovery rate) for optimizing the independent filtering.
+
+By setting independentFiltering = TRUE, independent filtering is applied automatically. 
+
+From now on, we will consistently use the same settings for the results function for the rest of the analysis.
+
+```{r}
+results.lrt = results(dds_qc, independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH")
+
+NPC_vs_ES= results(dds_qc, contrast=c("condition", "NPC", "ES"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH", test="Wald")
+CN_vs_NPC = results(dds_qc, contrast=c("condition", "CN", "NPC"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH", test="Wald")
+CN_vs_ES = results(dds_qc, contrast=c("condition", "CN", "ES"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH",test="Wald")
+```
+
+Indeed, after we removed the data related to genes with low read counts, we obtained a satisfactory p-value histogram, in accordance with our expectation that the null hypothesis will be true for some tests (i.e. some genes are not differentially expressed across conditions) and will be false for some tests (i.e. some genes are indeed differentially expressed across conditions). In fact, we see that the peak close to 0 on the x-axis is very tall compared to the rest of the histogram, telling us that a large proportion of tests reveal a significant difference (i.e. many genes are differentially expressed across conditions). 
+ 
+```{r}
+par(mfrow= c(1,3))
+hist(NPC_vs_ES$pvalue) 
+hist(CN_vs_NPC$pvalue) 
+hist(CN_vs_ES$pvalue) 
+```
+
+## MA plots and volcano plots for DE results
+
+### MA plots and volcano plots for NPC vs ES
+
+```{r}
+library(scales)
+```
+
+First of all, we want to find out which genes are differentially expressed between the NPC and ES condition. Recall that, previously, we used the results function to compute the following for each gene: the log2FoldChange and the adjusted p value associated with the log2FoldChange. Throughout this analysis, we specify the threshold for statistical significance as 0.05. This means that amongst the genes considered as differentially expressed, we expect the proportion of false positives to be 5%.
+```{r}
+#NPC_vs_ES= results(dds_qc, contrast=c("condition", "NPC", "ES"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH", test="Wald")
+```
+
+This dataframe shows the log2FoldChange from ES to NPC for each gene and their corresponding adjusted p values. A positive log2FoldChange means that gene expression increased from ES to NPC, while a negative log2FoldChange means that gene expression decreased from ES to NPC.
+
+```{r}
+head(NPC_vs_ES)
+```
+We visualize the above using a volcano plot. While the y axis corresponds to the negative log10 of the adjusted p value, the x axis corresponds to the log2FoldChange. The dots on the left side of the blue vertical line represent genes that show decreased expression from ES to NPC, while the dots on the right side of the blue line represent genes that show increased expression from ES to NPC. While red signifies that the change from ES to NPC is statistically significant, black signifies that the change from ES to NPC is not statistically significant.
+
+While most of the statistically significant log2FoldChange values are between -12 to 12, we see some outliers, especially those with log2FoldChange values more negative than -20 and more positive than 20.
+```{r}
+plot(NPC_vs_ES$log2FoldChange, 
+     -log10(NPC_vs_ES$padj), 
+     pch=19, 
+     ylim=c(0,100),
+     col = factor(NPC_vs_ES$padj < 0.05),
+     xlim=c(min(NPC_vs_ES$log2FoldChange), max(NPC_vs_ES$log2FoldChange))) #volcano plot
+
+abline(v= 0, col = "blue")
+abline(h= -log10(0.05), col = "blue")
+
+legend("topleft",
+       legend = levels(factor(NPC_vs_ES$padj < 0.05)),
+       pch = 19,
+       col = factor(levels(factor(NPC_vs_ES$padj < 0.05))),
+       title = "Statistically significant fold change")
+```
+Alternatively, we can visualize the above using an MA plot, which plots log2(normalized counts in NPC / normalized counts in ES)
+against 0.5 * log2(normalized counts in NPC * normalized counts in ES), where each point on the plot corresponds to a single gene. The more positive the y axis coordinate of a point is, the more highly the gene corresponding to it is expressed on average in the two conditions NPC and ES. The closer the x axis coordinate of a point is to 0, the less different the gene expression is between the two conditions NPC and ES. However, this difference does not refer to statistical significance. If the x axis coordinate of a point is positive, then the gene is more highly expressed in NPC relative to ES. If the x axis coordinate of a point is negative, then the gene is expressed less in NPC relative to ES. Moreover, while the color blue signifies that the change from ES to NPC is statistically significant, the color grey signifies that it is not statistically significant.
+
+We see that on average, log fold changes are approximately 0 across all genes, regardless of mean of normalized counts, indicating that the total level of gene expression for all genes are rather similar between NPC and ES. This is revealed by how the lowess curve (in red) agrees closely with the log fold change = 0 line (in grey).
+```{r}
+plotMA(NPC_vs_ES, 
+       alpha= 0.05,
+       main= "MA plot for NPC vs ES",
+       xlim= c(min(NPC_vs_ES$baseMean),max(NPC_vs_ES$baseMean)),
+       ylim=c(min(NPC_vs_ES$log2FoldChange),max(NPC_vs_ES$log2FoldChange)))
+
+lines(lowess(NPC_vs_ES$baseMean,NPC_vs_ES$log2FoldChange), col= "red")
+```
+
+### MA plots and volcano plots for CN vs NPC
+
+Next, we want to find out which genes are differentially expressed between the CN and NPC condition. Recall that, previously, we used the results function to compute the following for each gene: the log2FoldChange and the adjusted p value associated with the log2FoldChange. 
+
+```{r}
+#CN_vs_NPC = results(dds_qc, contrast=c("condition", "CN", "NPC"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH", test="Wald")
+```
+
+This dataframe shows the log2FoldChange from NPC to CN for each gene and their corresponding adjusted p values. A positive log2FoldChange means that gene expression increased from NPC to CN, while a negative log2FoldChange means that gene expression decreased from NPC to CN.
+```{r}
+head(CN_vs_NPC)
+```
+
+We visualize the above using a volcano plot. While the y axis corresponds to the negative log10 of the adjusted p value, the x axis corresponds to the log2FoldChange. The dots on the left side of the blue line represent genes that show decreased expression from NPC to CN, while the dots on the right side of the blue line represent genes that show increased expression from NPC to CN. While red signifies that the change from NPC to CN is statistically significant, black signifies that the change from NPC to CN is not statistically significant.
+
+While most of the statistically significant log2FoldChange values are between -10 to 10, we see some outliers, especially those with log2FoldChange values more negative than -20 and more positive than 20.
+```{r}
+plot(CN_vs_NPC$log2FoldChange, 
+     -log10(CN_vs_NPC$padj), 
+     pch=19, 
+     ylim=c(0,100),
+     col = factor(CN_vs_NPC$padj < 0.05),
+     xlim=c(min(CN_vs_NPC$log2FoldChange), max(CN_vs_NPC$log2FoldChange))) 
+
+abline(v= 0, col = "blue")
+abline(h= -log10(0.05), col = "blue")
+
+legend("topleft",
+       legend = levels(factor(CN_vs_NPC$padj < 0.05)),
+       pch =19,
+       col = factor(levels(factor(CN_vs_NPC$padj < 0.05))),
+       title = "Statistically significant fold change")
+```
+Alternatively, we can visualize the above using an MA plot, which plots log2(normalized counts in CN / normalized counts in NPC)
+against 0.5 * log2(normalized counts in CN * normalized counts in NPC), where each point on the plot corresponds to a single gene. T
+he more positive the y axis coordinate of a point is, the more highly the gene corresponding to it is expressed on average in the two conditions CN and NPC. The closer the x axis coordinate of a point is to 0, the less different the gene expression is between the two conditions CN and NPC. However, this difference does not refer to statistical significance. If the x axis coordinate of a point is positive, then the gene is more highly expressed in CN relative to NPC. If the x axis coordinate of a point is negative, then the gene is expressed less in CN relative to NPC. Moreover, while the color blue signifies that the change from NPC to CN is statistically significant, the color grey signifies that it is not statistically significant.
+
+We see that on average, log fold changes are approximately 0 across all genes, regardless of mean of normalized counts, indicating that the total level of gene expression for all genes are rather similar between NPC and CN. This is revealed by how the lowess curve (in red) agrees closely with the log fold change = 0 line (in grey).
+```{r}
+plotMA(CN_vs_NPC, 
+       alpha= 0.05,
+       main= "MA plot for CN vs NPC",
+       xlim= c(min(CN_vs_NPC$baseMean),max(CN_vs_NPC$baseMean)),
+       ylim=c(min(CN_vs_NPC$log2FoldChange),max(CN_vs_NPC$log2FoldChange)))
+
+lines(lowess(CN_vs_NPC$baseMean,CN_vs_NPC$log2FoldChange), col= "red")
+```
+```{r}
+CN_vs_NPC
+```
+
+### MA plots and volcano plots for CN vs ES
+
+Finally, we want to find out which genes are differentially expressed between the CN and ES condition. Recall that, previously, we used the results function to compute the following for each gene: the log2FoldChange and the adjusted p value associated with the log2FoldChange. 
+
+```{r}
+#CN_vs_ES = results(dds_qc, contrast=c("condition", "CN", "ES"), independentFiltering = TRUE, alpha=0.05, pAdjustMethod = "BH",test="Wald")
+```
+
+This dataframe shows the log2FoldChange from ES to CN for each gene and their corresponding adjusted p values. A positive log2FoldChange means that gene expression increased from ES to CN, while a negative log2FoldChange means that gene expression decreased from ES to CN.
+```{r}
+head(CN_vs_ES)
+```
+We visualize the above using a volcano plot. While the y axis corresponds to the negative log10 of the adjusted p value, the x axis corresponds to the log2FoldChange. The dots on the left side of the blue line represent genes that show decreased expression from ES to CN, while the dots on the right side of the blue line represent genes that show increased expression from ES to CN. While red signifies that the change from ES to CN is statistically significant, black signifies that the change from ES to CN is not statistically significant.
+
+While most of the statistically significant log2FoldChange values are between -15 to 15, we see some outliers, especially those with log2FoldChange values more negative than -20 and more positive than 20.
+```{r}
+plot(CN_vs_ES$log2FoldChange, 
+     -log10(CN_vs_ES$padj), 
+     pch=19, 
+     ylim=c(0,100), 
+     xlim=c(min(CN_vs_ES$log2FoldChange), max(CN_vs_ES$log2FoldChange)),
+     col = factor(CN_vs_ES$padj < 0.05)) #volcano plot
+
+abline(v= 0, col = "blue")
+abline(h= -log10(0.05), col = "blue")
+
+legend("topleft",
+       legend = levels(factor(CN_vs_ES$padj < 0.05)),
+       pch = 19,
+       col = factor(levels(factor(CN_vs_ES$padj < 0.05))),
+       title = "Statistically significant fold change")
+```
+Alternatively, we can visualize the above using an MA plot, which plots log2(normalized counts in CN / normalized counts in ES)
+against 0.5 * log2(normalized counts in CN * normalized counts in ES), where each point on the plot corresponds to a single gene. 
+The more positive the y axis coordinate of a point is, the more highly the gene corresponding to it is expressed on average in the two conditions CN and ES. The closer the x axis coordinate of a point is to 0, the less different the gene expression is between the two conditions CN and ES. However, this difference does not refer to statistical significance. If the x axis coordinate of a point is positive, then the gene is more highly expressed in CN relative to ES. If the x axis coordinate of a point is negative, then the gene is expressed less in CN relative to ES. Moreover, while the color blue signifies that the change from ES to CN is statistically significant, the color grey signifies that it is not statistically significant.
+
+We see that on average, log fold changes are approximately 0 across all genes, regardless of mean of normalized counts, indicating that the total level of gene expression for all genes are rather similar between CN and ES. This is revealed by how the lowess curve (in red) agrees closely with the log fold change = 0 line (in grey).
+```{r}
+plotMA(CN_vs_ES, 
+       alpha= 0.05,
+       main= "MA plot for CN vs ES",
+       xlim= c(min(CN_vs_ES$baseMean),max(CN_vs_ES$baseMean)),
+       ylim=c(min(CN_vs_ES$log2FoldChange),max(CN_vs_ES$log2FoldChange)))
+
+lines(lowess(CN_vs_ES$baseMean,CN_vs_ES$log2FoldChange), col= "red")
+```
+
+## K-means clustering
+
+Now, we want to use k-means clustering, so as to find naturally occurring groupings of genes.
+```{r}
+library(cluster)
+```
+ 
+Specifically, we want to use k-means clustering for genes that exhibit statistically significant fold changes across conditions. 
+```{r}
+significant_results = results.lrt[!is.na(results.lrt$padj) & results.lrt$padj<0.05, ]
+rld = rlog(dds_qc)
+rld_signif = assay(rld)[rownames(significant_results),]
+```
+
+Consider that within sum of squares (WSS) is scale dependent, with attributes contributing to this sum depending on their scale. Different units of measurements will thus lead to different clustering results. Therefore, before we even begin, we scale the abundances by converting them to z-scores, before applying the k-means algorithm, so as to remove the effects of scale dependence.
+
+```{r}
+rld_z = t(apply(rld_signif, 1, function(x){ (x - mean(x)) / sd(x)}))
+```
+
+### Using elbow method to choose k for k-means clustering
+
+Moreover, in order to carry out k-means analysis, we need to choose the value of k, which is the number of clusters. With reference to the diagram below, within sum of squares (WSS) is greatly reduced when k increases from 2 to 3, and 3 to 4, showing a substantial improvement. Moreover, with reference to the diagram below, it is clear that the reduction in WSS is fairly linear for k > 7, showing a small improvement. Given the above, we should pick a value of k that is at least 4, but not more than 7. Visually, there is no sharp turning point in the curve below, hence the curve presents no obvious elbow. But we can still be fairly confident that we should pick k somewhere from the range of 4 to 7.
+
+Note that by using set.seed(123), we set the seed of R‘s random number generator, which is useful for creating simulations or random objects that can be reproduced. We will use set.seed(123) consistently throughout this analysis.
+```{r}
+set.seed(123)
+k.max <- 20
+wss <- sapply(2:k.max, 
+              function(k){kmeans(rld_z, k, nstart=50,iter.max = 50)$tot.withinss}) 
+
+plot(2:k.max, wss,
+     type="b", 
+     pch = 19, 
+     frame = FALSE, 
+     xlim = c(2,20),
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+```
+
+### Using silhouette method to choose k for k-means clustering
+
+To narrow down our options for the value of k, we will employ the average silhouette method in conjunction with the elbow method. First, some background knowledge: The silhouette width ranges from -1 to +1, with a high silhouette width indicating a good clustering. Therefore, the optimal number of clusters k is the one that maximizes the average silhouette over a range of possible values for k. 
+
+Below, we create a plot of the average silhouette width against the number of clusters k. Looking at the plot below,
+the average silhouette width is maximized at k=2, indicating that k=2 is the optimal number of clusters, if the average silhouette method was the sole method of choosing k. However, remember that through the elbow method, we narrowed down the choice of k to be somewhere from k=4 to k=7. Looking at the plot below, when k increases from 4 to 5, from 5 to 6 and 6 to 7, the average silhouette width decreases. Since k=4 yields the highest average silhouette widths among these choices of k, this indicates that k=4 is the optimal number of clusters, if we employ the elbow method and average sihouette method in conjunction with one another. Hence, this supports the choice of k =4.
+
+```{r}
+set.seed(123)
+
+SIL = sapply(2:20, function(i) {
+  print(i)
+  results.coef.kmeans =  kmeans(rld_z, i, nstart=50, iter.max=50)
+  mean(silhouette(results.coef.kmeans$cluster, dist(rld_z))[,3]) })
+
+plot(c(0,SIL), type="b")
+```
+Moreover, a visual inspection of the silhouette plot for different number of clusters k also supports the choice of k=4. 
+
+When k= 4, all the clusters silhouette plot falls beyond the average silhouette score, which is indicated by the black vertical line. Similarly, when k= 5, 6 or 7, all the clusters silhouetter plot falls beyond the average silhouette score. Hence, k= 4 and k= 5,6 or 7 both fare pretty well in this aspect.
+
+Also, regardless of whether k=4 or k= 5,6 or 7, the variability in the size of the silhouette plots for the k clusters seems rather similar.Hence, k= 4 and k= 5,6 or 7 both fare pretty well in this aspect.
+
+When k=4, the thickness of the silhouette plots of the 4 clusters seems more uniform (i.e. greater similarity between the thickness of silhouette plots for different clusters), as compared to the thickness of the silhouette plots of the k clusters when k= 5, 6 or 7, which are less uniform. Hence, in this aspect, k=4 is more appropriate than k= 5, 6 or 7.
+
+In terms of all three criteria, k=4 is the most appropriate, as compared to k= 5, 6 or 7, which is less appropriate. Hence, we should choose k=4.
+
+```{r}
+set.seed(123)
+
+for (i in 4:7){
+  k = i
+  results.coef.kmeans =  kmeans(rld_z, k, nstart=10, iter.max=50) # K: 6
+  x = silhouette(results.coef.kmeans$cluster, dist(rld_z))
+  plot(x, col="black", border=NA, main=paste("k = ", k, collapse = "")) 
+  abline(v= summary(x)$avg.width)
+  }
+
+```
+
+### K-means clustering with k = 4
+
+Hence, we use k = 4 to carry out k-means analysis, as shown below. Notice that in the k-means analysis, we specify nstart = 50. This is because we are cognizant of the fact that k-means analysis is sensitive to initialization. Therefore, we run kmeans a lot of times at the start and choose the best starting value, thus avoiding getting stuck in a local minima. Throughout this analysis, we consistently use nstart = 50. 
+
+```{r}
+set.seed(123)
+
+nclust = 4
+results.coef.kmeans =  kmeans(rld_z, nclust, nstart=50, iter.max=50) 
+results.coef = rld_z[order(results.coef.kmeans$cluster),]
+indicator = results.coef.kmeans$cluster[order(results.coef.kmeans$cluster)]
+
+table(results.coef.kmeans$cluster)
+```
+
+
+## Heatmap for DE results
+
+```{r}
+library(pheatmap)
+library("grid")
+library("gridExtra")
+```
+
+Recall that previously, we scaled the read counts by converting them to z-scores. Now, for the purpose of the heatmap, we will leave any z-scores between -3 and 3 untouched. If a z-score is more than 3, we change it to 3. If a z-score is less than 3, we set it to -3. We specify that in our heat map, if the z-score is -3, it will correspond to the darkest shade of blue, but if the z-score is 3, it will correspond to the darkest shade of red.
+
+```{r}
+thr = 3
+rld_z[rld_z > thr] = thr 
+rld_z[rld_z < -thr] = -thr 
+  
+paletteLength = 20 
+  
+breaksList <- c(seq(-thr, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(thr/paletteLength, thr, length.out=floor(paletteLength/2)))
+  
+color = c(colorRampPalette(c("mediumblue", "white"))(14), colorRampPalette(c("white", "firebrick2"))(14))
+  
+breaksList = seq(-3, 3, length.out = 29)
+```
+
+Using the specifications above, we create a heatmap to visualize the levels of gene expression for various samples, in comparison to one another. 
+```{r}
+heat.map <- pheatmap(results.coef, cluster_col=FALSE, breaks=breaksList, cluster_rows=FALSE, show_rownames=FALSE,color = color,fontsize_row = 3, legend=TRUE,border_color = NA)
+```
+Looking at the heat map above, we see that the portion for ES_1 looks similar to ES_2, NPC_1 looks similar to NPC_2 and CN_1 looks similar to CN_2, indicating that levels of gene expression are rather similar for replicates within the same condition. 
+
+Moreover, we see that for each sample, the heatmap is separated into 4 distinct patches with different colors and shades. These 4 distinct patches correspond to the 4 clusters that we identified using k-means clustering. 
+
+Moreover, we see that there are obvious changes in the pattern of gene expression from ES to NPC to CN. 
+
+To better understand what each cluster of genes is about, and how the level of expression in this cluster of genes change from one condition to the next, we will carry out enrichment analysis for all 4 clusters.
+
+
+## Enrichment analysis
+
+Please describe in detail what you think each of the clusters in this dataset corresponds to....how does this group of genes relate to the experiment/biology?
+
+```{r}
+library(clusterProfiler)
+library(org.Mm.eg.db)
+```
+
+Now, we carry out enrichment analysis using the function enrichGO provided by ClusterProfiler, for each of the 4 clusters that we have identified above.
+
+### Cluster 1: Immune response and inhibition of differentiation
+
+To perform functional enrichment analysis, we need the following inputs.
+
+Firstly, a set of differentially expressed genes (study sets), which in our case, is a single cluster of genes from the clusters that we have identified above. In the example below, we specify gene = c1, meaning that the study set is cluster 1.
+
+Secondly, a set with all the genes to consider in the analysis (population set). In the example below, we specify universe = rownames(dds_qc), meaning that the population set is the list of genes in our data frame after removing the genes with low read counts.
+
+Thirdly, gene ontology annotations which associate the genes in the population set to gene ontology terms.
+
+By specifying OrgDb = org.Mm.eg.db in the example below, this means that we wish to use the organism database for mouse. 
+
+By specifying ont = BP in the example below, this means that our goal is to determine whether GO terms about specific biological processes are statistically significantly over represented within each cluster of genes, given the population set. In other words, we wish to determine which GO terms about specific biological processes appear more frequently than would be expected by chance, when examining the set of terms annotated to the genes in each cluster, given the population set. This employs a hypergeometric test, which I will describe below. 
+
+First, we set a cut off for determining whether a GO term is statistically significantly over represented, which in the example below, is qvalueCutoff = 0.1. 
+
+Next, for each GO term, we count the frequency (k) of genes in the study set (n) that are associated to the term, and the frequency (K) of genes in the population set (N) that are associated to the same term. Subsequently, we calculate the probability of obtaining at least k genes associated to the term if n genes would be randomly sampled from the population (pvalue), given the frequency K and size N of the population. 
+
+Next, to correct for multiple testing, this probability (pvalue) is converted to a qvalue using the Benjamin and Hochberg (BH) procedure, which is why we specify pAdjustMethod = "BH" in the example below. If the qvalue is below qvalueCutoff = 0.1, then that term as being statistically significantly over represented. By setting pvalueCutoff = 1 in the example below, this means that the pvalue does not matter in determining statistical significance, only the qvalue matters.
+
+The same logic applies not just for this example with cluster 1, but also clusters 2 to 4.
+
+```{r}
+c1 = names(results.coef.kmeans$cluster[results.coef.kmeans$cluster==1])
+
+ego1 <- enrichGO(gene          = c1, #cluster 1 is the study set
+                universe      = rownames(dds_qc), #the population set
+                OrgDb         = org.Mm.eg.db, #mouse database
+                keyType       = 'ENSEMBL',
+                ont           = "BP", #find out which biological process GO term is overrepresented
+                pAdjustMethod = "BH", #benjamin hochberg procedure
+                pvalueCutoff  = 1, #p value doesn't matter in determining statistical significance
+                qvalueCutoff  = 0.1, #if qvalue < 0.1, GO term is statistically significantly overrepresented
+                readable      = TRUE)
+```
+
+```{r}
+dotplot(ego1)
+```
+
+By briefly looking through the data frame for ego1, we realize that many of the biological process annotations that are statistically significantly over represented are related to either immune response or inhibition of differentiation. 
+
+```{r}
+ego1.df = as.data.frame(ego1)
+ego1.df$Description[1:30]
+```
+The expression of genes involved in these biological processes are reduced from embryonic stem cells (ES) to neural progenitor cells (NPC), as shown by the change in color from predominantly red to predominantly blue in the heatmap. From neural progenitor cells (NPC) to cortical neurons (CN), the expression of these genes remain at a similar level, as shown by the maintenance of the predominantly blue color between the two conditions.
+
+```{r}
+heat.map <- pheatmap(results.coef[c1,], cluster_col=FALSE, breaks=breaksList, cluster_rows=FALSE, show_rownames=FALSE,color = color,fontsize_row = 3, legend=TRUE,border_color = NA)
+```
+A plausible explanation for this pattern of gene expression is as follows: Leukemia inhibitory factor (LIF), which affects cell growth by inhibiting differentiation, was added to stem cell culture medium to reduce spontaneous differentiation. By removing LIF, this pushes the cells towards differentiation. In the key resources table of the article "Multiscale 3D Genome Rewiring during Mouse Neural Development", it is shown that leukemia inhibitory factor (LIF) was used. Since leukemia inhibitory factor was used to reduce spontaneous differentiation, this is why the expression of genes involved cellular response to leukemia inhibitory factor was elevated in embryonic stem cells.
+```{r}
+sum(!(c("cellular response to leukemia inhibitory factor") %in% ego1.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+After which, LIF was removed to allow for the embryonic stem cells to differentiate into neural progenitor cells and then cortical neurons. This is why the expression of genes involved cellular response to leukemia inhibitory factor is decreased from the embryonic stem cell sample to the neural progenitor cell and cortical neuron samples. 
+
+```{r}
+sum(!(c("meiotic cell cycle") %in% ego1.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Moreover, the description of experimental methods in the article mention how some cells lines were infected with viruses and then selected after a few days. This account for why the expression of genes involved in immune response was high in the embryonic stem cells sample.
+
+```{r}
+sum(!(c("defense response to virus", "inflammatory response", "innate immune response") %in% ego1.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+After which, their expression levels decreased, such that the expression of these genes involved in immune response is lower in NPC and CN. This is hardly surprising, given the fact that neural progenitor cells and cortical neurons are immune privileged, meaning they are able to tolerate the introduction of antigens without eliciting an inflammatory immune response.
+
+### Cluster 2: Neurotransmission and regulation of neurotransmission 
+
+```{r}
+c2 = names(results.coef.kmeans$cluster[results.coef.kmeans$cluster==2])
+
+ego2 <- enrichGO(gene          = c2, #cluster 2 is the study set
+                universe      = rownames(dds_qc), #the population set
+                OrgDb         = org.Mm.eg.db, #mouse database
+                keyType       = 'ENSEMBL',
+                ont           = "BP", #find out which biological process GO term is overrepresented
+                pAdjustMethod = "BH", #benjamin hochberg procedure
+                pvalueCutoff  = 1, #pvalue doesn't matter in determining statistical significance
+                qvalueCutoff  = 0.1,  #if qvalue < 0.1, GO term is statistically significantly overrepresented
+        readable      = TRUE)
+
+```
+
+```{r}
+dotplot(ego2)
+```
+By briefly looking through the data frame for ego2, we realize that many of the biological process annotations that are statistically significantly over represented are related to neurotransmission, the transfer of information between neurons, in some way or another.
+
+```{r}
+ego2.df = as.data.frame(ego2)
+ego2.df$Description[1:30]
+```
+
+The expression of genes involved in these biological processes that are related to neurotransmission are increased from embryonic stem cells (ES) to neural progenitor cells (NPC), as shown by the change from predominantly blue color to a mixture of blue and white color. From neural progenitor cells (NPC) to cortical neurons (CN), the expression of these genes increase, as shown by the change from mixture of blue and white color to predominantly red color.
+
+```{r}
+heat.map <- pheatmap(results.coef[c2,], cluster_col=FALSE, breaks=breaksList, cluster_rows=FALSE, show_rownames=FALSE,color = color,fontsize_row = 3, legend=TRUE,border_color = NA)
+```
+This is hardly surprising because by increasing the expression of genes involved in the biological processes supporting neurotransmission, from ES to NPC to CN, this allows cortical neurons to develop the capability of communicating with other neighboring neurons, which is expected.
+
+From my contextual knowledge, the regulation of ions channels and ion pumps embedded in the plasma membrane of a neuron influences the voltage difference across the plasma membrane.
+```{r}
+sum(!(c("potassium ion transmembrane transport", "regulation of ion transmembrane transport", "regulation of cation channel activity") %in% ego2.df$Description)) == 0
+```
+And it is the change in this voltage difference, from resting potential to action potential, that results in neurons transiting from not firing to firing. 
+```{r}
+sum(!(c("regulation of membrane potential", "action potential") %in% ego2.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+When neurons fire, synaptic vesicles containing neurotransmitters fuse with the presynaptic plasma membrane, hence releasing neurotransmitters into the synapse. In turn, these neurotransmitters exert their influence on the postsynaptic neuron, thus allowing for communication between the presynaptic and postsynaptic neuron.
+```{r}
+sum(!(c("synaptic vesicle exocytosis", "neurotransmitter secretion") %in% ego2.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Moreover, the above pattern of gene expression also makes sense because many of the over represented biological process annotations are related to neuroplasticity at the cellular level, the capacity for neurons to change the way they function as a result of experience, which is essential for learning. This is hardly surprising because by increasing the expression of genes involved in these processes, from ES to NPC to CN, this allows cortical neurons to gain the expected property of neuroplasticity at the cellular level.
+
+There are various mechanisms underlying neuroplasticity at the cellular level. First, presynaptic facilitation: this is a process, documented in studies of Aplysia, that underlies many kinds of learning. It occurs when learning results in an increased secretion of neurotransmitter into the synapse.
+```{r}
+sum(!(c("regulation of neurotransmitter secretion") %in% ego2.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Second, long term potentiation (LTP). When a postsynaptic neuron is repeatedly stimulated by neurotransmitters released by the presynaptic neuron into the synapse, this results in a long-lasting increase in the postsynaptic neuron's responsiveness to specific inputs (i.e. an increase in the postsynaptic neuron’s potential for firing).
+```{r}
+sum(!(c("long-term synaptic potentiation") %in% ego2.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Third, the creation of entirely new synapses via the growth of new axons and dendrites which result in new lines of communication between neighboring neurons. 
+```{r}
+sum(!(c("axonogenesis", "dendrite morphogenesis") %in% ego2.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+In turn, neural plasticity allows for adjustments in neural connections, so that newly acquired memories or learnt information can be represented by a new pattern of communication among neurons, which is essential for learning and memory.
+
+```{r}
+sum(!(c("memory", "learning") %in% ego2.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+All of these over represented annotations point towards cluster 2 being a set of genes involved in neuro-transmission or its regulation in some way or another.
+
+### Cluster 3: Development of central nervous system
+
+```{r}
+c3 = names(results.coef.kmeans$cluster[results.coef.kmeans$cluster==3])
+
+ego3 <- enrichGO(gene          = c3, #cluster 3 is the study set
+                universe      = rownames(dds_qc), #the population set
+                OrgDb         = org.Mm.eg.db, #mouse database
+                keyType       = 'ENSEMBL',
+                ont           = "BP", #find out which biological process GO term is overrepresented
+                pAdjustMethod = "BH",  #benjamin hochberg procedure
+                pvalueCutoff  = 1, #pvalue doesn't matter in determining statistical significance
+                qvalueCutoff  = 0.1, #if qvalue < 0.1, GO term is statistically significantly overrepresented
+        readable      = TRUE)
+```
+
+```{r}
+dotplot(ego3)
+```
+By briefly looking through the data frame for ego3, we realize that many of the biological process annotations that are statistically significantly over represented are related to cell differentiation, which is the process through which "generic" or "common" cells transform into specialized cells with defined tasks. Moreover, many of the biological process annotations that are statistically significantly over represented are related to the development of organ systems (both the central nervous system and other organ systems). This makes sense because through cell differentiation, different cell types can be produced, to build up different tissues, organs and organ systems.
+
+```{r}
+ego3.df = as.data.frame(ego3)
+ego3.df$Description[1:30]
+```
+The expression of genes involved in these biological processes are increased from embryonic stem cells (ES) to neural progenitor cells (NPC), as shown by the change in color from blue to red. From neural progenitor cells (NPC) to cortical neurons (CN), the expression of these genes seem to rather similar, as shown by the maintenance of the same color red.
+
+```{r}
+heat.map <- pheatmap(results.coef[c3,], cluster_col=FALSE, breaks=breaksList, cluster_rows=FALSE, show_rownames=FALSE,color = color,fontsize_row = 3, legend=TRUE,border_color = NA)
+```
+As mentioned before, many of the biological process annotations that are over represented are related to the development of the nervous system. This makes sense because by increasing the level of expression of genes involved in these biological processes as embryonic cells differentiate into cortical neurons, this enables the development of the embryonic nervous system, which cortical neurons form a part of.
+
+After the sperm and egg cell fuse to form a zygote, the zygote divides to form an embryo. 
+
+At first, the embryonic stem cells can develop into any one of three germ layers that give rise to different tissues in the body. One of these layers is the ectoderm, the outer tissue that develops into the skin and nervous system. Hence, it makes sense for the expression of genes involved in skin to be increased.
+
+```{r}
+sum(!(c("epidermis development") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+After a while, a portion of the ectoderm differentiates into tissue that will become the nervous system. Cells in this region are induced by molecular signals to form a neural plate, which then forms a neural groove, which transforms into a neural tube. At this point, the early nervous system is a simple, hollow tube. 
+
+```{r}
+sum(!(c("central nervous system neuron development", "neural tube development") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+While the anterior end of the tube develops into the brain, the posterior portion becomes the spinal cord.
+
+```{r}
+sum(!(c("anterior/posterior pattern specification", "spinal cord development") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+The anterior end further consists of three primary vesicles: The prosencephalon develops into the telencephalon and diencephalon, which further develop into the forebrain.
+```{r}
+sum(!(c("telencephalon development", "diencephalon development", "forebrain development") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+The mesencephalon develops into the midbrain. 
+```{r}
+sum(!(c("midbrain development") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+
+Lastly, the rhombencephalon, develops into the metencephalon and myelecencephalon, which develop into the hindbrain. 
+```{r}
+sum(!(c("metencephalon development", "hindbrain development") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+The proper formation of these parts of the nervous system requires axis patterning, cell fate specification, cell proliferation and cell migration, which are controlled by the Wnt signaling pathway. 
+
+```{r}
+sum(!(c("pattern specification process" , "cell fate specification", "neural precursor cell proliferation", "neuron migration",
+        "regulation of Wnt signaling pathway") %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+The overrepresentation of annotations for the above biological processes hence make a lot of sense, because by increasing the expression of genes related to these biological processes over the course of differentiation, this allows for the proper development of the nervous system, which the cortical neurons are a part of.
+
+At the same time, it is counter intuitive that many of the biological process annotations that are over represented contribute towards the development of tissues, organs and organ systems that are not part of the nervous system, and that the expression of genes related to these biological processes increase as embryonic stem cells differentiate into cortical neurons. One possible interpretation is that the development of the nervous system and the development of other organ systems involve some common biological processes. For example, the Wnt signaling pathway is also essential for the development of bone, heart and muscle.
+
+```{r}
+sum(!(c("skeletal system development", "muscle tissue development", "cardiac chamber development" ) %in% ego3.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+
+All of these over represented annotations point towards cluster 3 being a set of genes involved in the development of the central nervous system in some way or another.
+
+### Cluster 4: Cell cycle
+
+```{r}
+c4 = names(results.coef.kmeans$cluster[results.coef.kmeans$cluster==4])
+
+ego4 <- enrichGO(gene          = c4, #cluster 4 is the study set
+                universe      = rownames(dds_qc), #the population set
+                OrgDb         = org.Mm.eg.db, #mouse database
+                keyType       = 'ENSEMBL',
+                ont           = "BP", #find out which biological process GO term is overrepresented
+                pAdjustMethod = "BH", #benjamin hochberg procedure
+                pvalueCutoff  = 1, #pvalue doesn't matter in determining statistical significance
+                qvalueCutoff  = 0.1, #if qvalue < 0.1, GO term is statistically significantly overrepresented
+        readable      = TRUE)
+```
+
+```{r}
+dotplot(ego4)
+```
+
+By briefly looking through the data frame for ego4, we realize that many of the biological processes that are statistically significantly over represented are related to the organization of chromosomes, and the production and processing of proteins and polynucleotides. 
+
+```{r}
+ego4.df = as.data.frame(ego4)
+ego4.df$Description[1:30]
+```
+
+Moreover, the expression of genes involved in these biological processes are reduced from embryonic stem cells (ES) to neural progenitor cells (NPC), as shown by the change in color from predominantly red to a mixture of white and red. From neural progenitor cells (NPC) to cortical neurons (CN), the expression of these genes seem to further decrease, as shown by the change in color from a mixture of white and red to predominantly blue.
+
+```{r}
+heat.map <- pheatmap(results.coef[c4,], cluster_col=FALSE, breaks=breaksList, cluster_rows=FALSE, show_rownames=FALSE,color = color,fontsize_row = 3, legend=TRUE,border_color = NA)
+```
+This pattern of expression makes sense in light of our understanding of the cell cycle. While embryonic stem cells and neural progenitor cells are still in the cell cycle, cortical neurons have already exited the cell cycle.
+
+Since embryonic stem cells and neural progenitor cells are still in the cell cycle, they will undergo interphase and mitosis. Interphase further consists of three parts: gap 1 (G1), synthesis (S), and gap 2 (G2). 
+
+G1 lasts from the birth of a new cell to the onset of chromosome replication. In this phase, the cell increases its supply of proteins, increases the number of organelles (such as mitochondria, ribosomes), and grows in size. This would involve transcription, in which RNA is synthesized from a DNA template. After which, the resultant RNA products may undergo further processing. 
+
+```{r}
+sum(!(c("ncRNA processing", "rRNA processing", "maturation of SSU-rRNA" ) %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Pre-mRNA would undergo some processing steps to become mature mRNA, which are subsequently translated into polypeptides, which fold into proteins. Some of these proteins would then combine with rRNA to form ribonucleoproteins, which are then assembled into ribosomes.
+
+```{r}
+sum(!(c("mRNA processing", "cytoplasmic translation", "protein folding", "ribonucleoprotein complex biogenesis", "ribosome biogenesis") %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Moreover, G1 would involve the biosynthesis of various products, in preparation for semi-conservative replication of DNA during the S phase.
+
+```{r}
+sum(!(c("nucleoside phosphate biosynthetic process", "ribose phosphate biosynthetic process", "ribonucleoside triphosphate biosynthetic process", "purine nucleoside triphosphate biosynthetic process", "purine-containing compound biosynthetic process") %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+
+During the S phase, the cell duplicates its genetic material through semi-conservative replication of DNA. During duplication, each chromosome doubles to produce identical sister chromatids that will become visible when the chromosomes condense at the beginning of mitosis. The two sister chromatids remain joined to each other at their centromeres. 
+
+```{r}
+sum(!(c("DNA replication") %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+Gap 2 (G2) is the interval between chromosome duplication and the beginning of mitosis. During this time, the cell may grow (usually less than during G1); it also synthesizes proteins that are essential to the subsequent steps of mitosis itself.
+
+After which, the cell enters into mitosis, which consists of prophase, prometaphase, metaphase, telophase and anaphase. 
+
+During prophase, chromatin condense into chromosomes, thus becoming visible under a light microscope. Each condensing chromosome has already been duplicated during interphase and thus consists of sister chromatids attached at their centromeres. 
+
+```{r}
+sum(!(c("chromosome organization") %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+
+During prometaphase, chromosomes from two centromeres attach to kinetochore at centromeric region of chromatid. 
+Chromosomes slide along the microtubule towards the centrosome from which that microtubule radiates.Kinetochore of each chromosome’s previously unattached sister chromatid now associates with microtubules extending from the opposite centrosome.
+
+During metaphase, chromosomes move towards the center of the mitotic spindle, thus being aligned in a plane, forming a metaphase plate roughly midway between the two poles of the cell. Microtubules from each pole of the cell are attached to the kinetochores of sister chromatids at their centromeres, and the forces pulling sister chromatids towards opposite poles are in a balanced equilibrium maintained by tension across chromosome
+
+During anaphase, sister chromatids separate at the centromere, with shortening kinetochore microtubules pulling chromatids towards the spindle poles. Each chromatid is now called a single chromosome and has a characteristic V shape because arms of chromatids lag behind kinetochore, when it is pulled rapidly towards the centrosome to which its microtubules are attached.
+
+```{r}
+sum(!(c("mitotic sister chromatid segregation" ) %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+
+During telophase, chromosomes reach the opposite poles. Spindle fibers disperse and nuclear envelope forms around group of chromatids at each pole. Moreover, nucleoli reappear and chromosomes begin to decondense into a stretched out chromatin configuration
+
+```{r}
+sum(!(c("chromosome organization") %in% ego4.df$Description)) == 0 #the GO terms corresponding to these descriptions are over represented
+```
+
+Since embryonic stem cells and neural progenitor cells are still in the cell cycle, they undergo interphase and mitosis, which are characterized by the biological processes described. Hence, it is expected that the expression of genes involved in these biological processes will be high in the embryonic stem cells and neural progenitor cells. On the other hand, cortical neurons are arrested in a resting form of G1 known as G0, in which the cell has left the cell cycle and stops dividing, hence they would not have to undergo interphase and mitosis. Hence, the expression of genes involved in biological processes supporting interphase and mitosis will expectedly be much lower in cortical neurons. As such, the pattern of gene expression observed for this fourth cluster of genes is largely consistent with our knowledge.
+
+All of these over represented annotations point towards cluster 4 being a set of genes involved in the cell cycle in one way or another.
+
+```{r}
+sessionInfo()
+```

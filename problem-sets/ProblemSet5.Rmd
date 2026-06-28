@@ -1,0 +1,219 @@
+---
+title: "ProblemSet5"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problem Set 5
+
+Genome Annotation and variation
+
+## Question 1
+
+```{r}
+library(GenomicFeatures)
+library(biomaRt)
+```
+
+__What percentage of the human genome (hg38) is covered by protein-coding genes (remember protein-coding genes can overlap)?.__(1 mark) 
+
+```{r question1a}
+getwd() #get working directory 
+setwd("../data/shared") #set working directory 
+hg.gtf.db <- makeTxDbFromGFF("Homo_sapiens.GRCh38.108.chr.gtf", format="gtf" ) #create hg.gtf.db
+
+ensembl.genes = genes(hg.gtf.db) #get information regarding genes
+
+# human = useEnsembl(biomart="ENSEMBL_MART_ENSEMBL",host="asia.ensembl.org", dataset="hsapiens_gene_ensembl", version="108") #this server is not working
+
+human = useEnsembl(biomart="ENSEMBL_MART_ENSEMBL",mirror = "asia", dataset="hsapiens_gene_ensembl", version="108") 
+
+bm.annotations = getBM(attributes=c("ensembl_gene_id", "entrezgene_id", "gene_biotype", "hgnc_symbol", "description"), mart=human, filters="ensembl_gene_id", values=ensembl.genes$gene_id, uniqueRows=TRUE)
+
+ensembl.genes$hgnc_symbol = bm.annotations$hgnc_symbol[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for hgnc symbol
+ensembl.genes$gene_biotype = bm.annotations$gene_biotype[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for gene biotype
+ensembl.genes$description = bm.annotations$description[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for description
+ensembl.genes$entrezgene = bm.annotations$entrezgene[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for entrezgene
+```
+
+```{r}
+hg38_sizes <- read.table("../data/problem-set-1/hg38_sizes.txt", quote="\"", comment.char="")
+filtered_seqlengths <- setNames(hg38_sizes$V2, hg38_sizes$V1)
+filtered_seqlengths <- filtered_seqlengths[names(filtered_seqlengths) %in% paste("chr", c(1:22, "X", "Y", "M"), sep="")] #filtered_seqlengths is a vector containing the lengths of each chromosome 1-22, X, Y and M
+
+length_of_human_genome <- sum(filtered_seqlengths) #we sum up the lengths of these chromosomes, thus getting the length of the human genome
+```
+
+```{r}
+protein_coding_genes_in_human_genome <- reduce(ensembl.genes[!is.na(ensembl.genes$gene_biotype) & ensembl.genes$gene_biotype == "protein_coding" & seqnames(ensembl.genes) %in% paste("chr", c(1:22, "X", "Y", "M"), sep="")]) #genes in the human genome with a protein coding biotype (i.e. not NA)
+
+length_of_protein_coding_genes_in_human_genome <- sum(width(protein_coding_genes_in_human_genome))
+
+#width(protein_coding_genes_in_human_genome) gives the lengths of each gene in the human genome
+#by applying sum to the previous result we get the sum of these lengths which is equal to the length of protein coding genes in the human genome
+```
+
+```{r}
+percentage_of_human_genome_covered_by_protein_coding_genes <- 100* (length_of_protein_coding_genes_in_human_genome / length_of_human_genome) #percentage of human genome covered by protein coding genes <- 100 * (length of protein coding genes in human genome / length of human genome)
+
+print(paste("the percentage of human genome covered by protein coding genes is", percentage_of_human_genome_covered_by_protein_coding_genes, "%"))
+```
+
+__What percentage of the human genome (hg38) is covered by the exons of protein-coding genes (remember protein-coding genes/exons can overlap)?.__(1 mark) 
+
+```{r question1b}
+hg38_exonsByGene = exonsBy(hg.gtf.db, "gene")
+pc_exons = hg38_exonsByGene[ensembl.genes$gene_id[!is.na(ensembl.genes$gene_biotype) & ensembl.genes$gene_biotype == "protein_coding"]] 
+pc_exons= reduce(pc_exons, ignore.strand= TRUE) #pc_exons gives information about the protein coding exons of each gene
+#use ignore.strand
+```
+
+```{r}
+pc_exon_widths = sapply(pc_exons, width) #for each gene, this gives us the lengths of individual exons in the gene
+
+pc_exon_widths_sums= sapply (pc_exon_widths, sum) #for each gene, this gives us the sum of lengths of all exons in each gene
+
+length_of_exons_of_protein_coding_genes_in_human_genome <- sum(pc_exon_widths_sums) #this is the sum of lengths of all exons of protein coding genes
+```
+
+```{r}
+percentage_of_human_genome_covered_by_exons_of_protein_coding_genes <- 100* (length_of_exons_of_protein_coding_genes_in_human_genome / length_of_human_genome) #percentage of human genome covered by exons of protein coding genes <- 100* (length of exons of protein coding genes in human genome / length of human genome)
+
+print(paste("the percentage of human genome covered by exons of protein coding genes is", percentage_of_human_genome_covered_by_exons_of_protein_coding_genes, "%"))
+```
+
+## Question 2
+
+__Which protein-coding gene has the longest exon in the human genome (provide the gene name)?.__(1 mark)
+
+```{r question2}
+name_of_gene_with_longest_exon <- ensembl.genes[names(which.max(sapply(pc_exon_widths, which.max)))]$hgnc_symbol #this gives the hgnc symbol of the gene with the longest exon
+
+print(paste("the protein coding gene with the longest exon in the human genome is", name_of_gene_with_longest_exon))
+```
+
+## Question 3
+
+__What is the frequency of A, T, G, Cs in the promoter of IRX3 (define a promoter to be 500bp upstream and 100bp downstream of the TSS) ?.__(1 mark)
+```{r question3, eval=FALSE}
+IRX3_promoter<- promoters(ensembl.genes[which(ensembl.genes$hgnc_symbol == "IRX3")], upstream= 500, downstream= 100)
+IRX3_promoter_sequence<- extractAt(Hsapiens$chr16, ranges(IRX3_promoter))[[1]] #this gives the sequence of bases in the IRX3 promoter 
+IRX3_promoter_sequence_base_frequency <- oligonucleotideFrequency(IRX3_promoter_sequence, 1) / sum(oligonucleotideFrequency(IRX3_promoter_sequence, 1)) #this gives the relative frequency of bases in the sequence
+IRX3_promoter_sequence_base_frequency
+```
+
+## Question 4
+
+__How many protein-coding genes in the genome have only 1 exon?__(1 mark)
+
+```{r question4a}
+exonnumbers = sapply(pc_exons, length) #for each gene, this gives the number of exons in the gene
+no_of_pcg_with_one_exon <- length(exonnumbers[exonnumbers==1]) #the number of protein coding genes with one exon
+print(paste(no_of_pcg_with_one_exon, "protein coding genes in the genome have only 1 exon"))
+```
+
+__What is the median number of exons per protein-coding gene?__(1 mark)
+
+```{r question4b}
+median_no_of_exons <- median(exonnumbers) #this gives the median number of exons in each gene
+print(paste("median number of exons per protein-coding gene:", median_no_of_exons))
+```
+
+## Question 5
+
+The file gene_gc.txt contains information on genes, specifically the GC percentage for each gene. However it is using entrez gene identifiers instead of ensembl gene identifiers. We need to merge this with the information we already have. We already have the code for annotating a GenomicRanges containing information on genes with Entrez gene identifiers.  
+
+###Question 5a:
+__Add an extra column to the GenomicRanges containing the genes which contains all of the information on the GC content of these genes__ (1 mark)
+```{r question5a}
+gene_gc <- read.delim("../data/problem-set-5/gene_gc.txt")
+ensembl.genes$percentage_gene_gc_content = gene_gc$percentage_gene_gc_content[match(ensembl.genes$entrezgene, gene_gc$entrezgene)] #add a column for the gc content (%) of each gene
+```
+ 
+ (this kind of data munging is the bane of a Computational Biologists life).
+ 
+ ## Question 5b
+ 
+__Plot the GC content for all protein coding genes against genes annotated as lincRNAs and genes annotated as miRNAs__ (1 mark)
+
+```{r question5b}
+three_gene_biotypes<- ensembl.genes[which(!is.na(ensembl.genes$gene_biotype) & (ensembl.genes$gene_biotype == "protein_coding" | ensembl.genes$gene_biotype== "lncRNA" | ensembl.genes$gene_biotype== "miRNA"))] #this gives information about protein coding, lincRNA and miRNA genes
+
+pc_genes <- ensembl.genes[!is.na(ensembl.genes$gene_biotype) & ensembl.genes$gene_biotype == "protein_coding" & seqnames(ensembl.genes) %in% paste("chr", c(1:22, "X", "Y", "M"), sep="")]
+lncRNA_genes <- ensembl.genes[ensembl.genes$gene_biotype== "lncRNA" & !is.na(ensembl.genes$gene_biotype)]
+miRNA_genes <- ensembl.genes[ensembl.genes$gene_biotype== "miRNA" & !is.na(ensembl.genes$gene_biotype)]
+```
+
+```{r}
+boxplot(percentage_gene_gc_content ~ gene_biotype,
+         data = three_gene_biotypes,
+         main = "Distribution of GC content for genes of each type",
+         xlab = "gene type",
+         ylab = "GC content (%)")
+grid()
+```
+
+Question 5c 
+
+__Are there any differences in the percentage GC content for different types of genes (i.e. protein_coding, lincRNAs and miRNAs), how do they differ?__ (2 marks)
+
+```{r}
+lincRNA_and_proteincoding <- three_gene_biotypes[which(three_gene_biotypes$gene_biotype == "protein_coding" | three_gene_biotypes$gene_biotype== "lncRNA")]
+
+lincRNA_and_miRNA <- three_gene_biotypes[which(three_gene_biotypes$gene_biotype == "miRNA" | three_gene_biotypes$gene_biotype== "lncRNA")]
+
+miRNA_and_proteincoding <- three_gene_biotypes[which(three_gene_biotypes$gene_biotype == "miRNA" | three_gene_biotypes$gene_biotype== "protein_coding")]
+```
+
+As seen below, the p-value (<2e-16) is less than the significance value of 0.05. Hence there is a statistically significant difference in the percentage GC content of lincRNA and protein coding genes. 
+
+```{r}
+model1 <- aov(lincRNA_and_proteincoding$percentage_gene_gc_content ~ lincRNA_and_proteincoding$gene_biotype)
+summary(model1) 
+```
+
+As seen below, the p-value (<2e-16) is less than the significance value of 0.05. Hence there is a statistically significant difference in the percentage GC content of lincRNA and miRNA coding genes. 
+
+```{r}
+model2 <- aov(lincRNA_and_miRNA$percentage_gene_gc_content ~ lincRNA_and_miRNA$gene_biotype)
+summary(model2) 
+```
+
+As seen below, the p-value (<2e-16) is less than the significance value of 0.05. Hence there is a statistically significant difference in the percentage GC content of miRNA and protein coding genes. 
+
+```{r}
+model3 <- aov(miRNA_and_proteincoding$percentage_gene_gc_content ~ miRNA_and_proteincoding$gene_biotype)
+summary(model3)
+```
+
+The median percentage GC content is highest for miRNA genes (50.835%), followed by protein coding genes (45.200%), then lincRNA genes (43.810%). 
+
+Similarly, the variability in percentage GC content is highest for miRNA genes (IQR= 18.3075%), followed by protein coding genes (IQR= 12.3200%), then lincRNA genes (IQR= 9.8825%). 
+
+```{r}
+aggregate(percentage_gene_gc_content ~ gene_biotype,
+          data = three_gene_biotypes,
+          FUN = IQR)
+```
+
+```{r}
+aggregate(percentage_gene_gc_content ~ gene_biotype,
+          data = three_gene_biotypes,
+          FUN = median)
+```
+
+From the histogram below, while the distribution of percentage GC content looks rather symmetrical in miRNA genes, it looks far more right-skewed in protein coding and lincRNA genes. 
+
+```{r}
+par(mfrow= c(3,1))
+hist (pc_genes$percentage_gene_gc_content, xlim= c(1,100), breaks= seq(0,100,0.01), freq= FALSE)
+hist (miRNA_genes$percentage_gene_gc_content, xlim= c(1,100), breaks= seq(0,100,0.01), freq= FALSE)
+hist (lncRNA_genes$percentage_gene_gc_content, xlim= c(1,100), breaks= seq(0,100,0.01), freq= FALSE)
+```
+
+```{r}
+sessionInfo()
+```

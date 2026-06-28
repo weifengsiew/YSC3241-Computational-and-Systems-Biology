@@ -1,0 +1,363 @@
+---
+title: "ProblemSet4"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Problem Set 4
+
+Week IV: Genome annotation 
+
+I would like to thank Mariana and Melodi for providing me with comments and insights. 
+
+```{r, include= FALSE}
+library(stringr)
+library(Biostrings)
+library(xtable)
+library(GenomicFeatures)
+library(ggplot2)
+library(rtracklayer)
+```
+
+## Question 1
+
+
+__Each line in the file hg38_promoters.bed corresponds to a 5kb region (+/- 2.5kb) around the transcription start site of a protein-coding gene.__
+
+### Question 1a
+
+__What percentage of gene promoters overlap an annotated CpG island?__ (1 mark)
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-4") #set working directory 
+hg38_promoters = import.bed("hg38_promoters.bed") #import file
+
+hg38_promoters_reduced <- reduce(hg38_promoters) #by applying the function reduce, i combine sequences with overlapping bases into a single sequence. as described, each line in the file hg38_promoters.bed corresponds to a 5kb region (+/- 2.5kb) around the transcription start site of a protein-coding gene. since the promoter is directly upstream of the transcription start side, each sequence in hg38_promoters_reduced should contain one promoter region. 
+
+no_of_promoters <- length(hg38_promoters_reduced)  #since each sequence in hg38_promoters_reduced should contain one promoter region, this gives the number of promoters 
+
+print(paste("number of promoters:", no_of_promoters))
+```
+
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-4") #set working directory 
+hg38_cpg = import.bed("hg38_cpg.bed") #import file
+
+hg38_cpg_reduced<- reduce(hg38_cpg) #by applying the function reduce, i combine sequences with overlapping bases into a single sequence
+
+no_of_overlapping_promoters<- length(unique(subjectHits(findOverlaps(hg38_cpg_reduced, hg38_promoters_reduced))))
+#by applying subjectHits, i get a vector of indexes, each corresponding to a sequence in hg38_promoters_reduced that overlaps with a cpg island
+#after which, i apply unique to the resultant vector, thus getting a vector of unique indexes 
+#after which, i apply length, thus getting the number of sequences in hg38_promoters_reduced that overlaps with a cpg island
+
+print(paste("number of promoters overlapping with a CpG island:", no_of_overlapping_promoters))
+```
+
+```{r}
+pct_overlapping_promoters<- (no_of_overlapping_promoters/no_of_promoters)*100 #by taking the number of overlapping promoters divided by the total number of promoters, then multiplying it by 100, i get the percentage of overlapping promoters
+print(paste("percentage of promoters overlapping with a CpG island= number of promoters overlapping with a CpG island / number of promoters * 100% =", pct_overlapping_promoters, "%"))
+```
+
+### Question 1b
+
+__What is the most common family of repeat elements that overlaps the promoters of protein-coding genes in the human genome? __ (1 mark)
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-4") #set working directory 
+extraCols <- c(repClass="character", repFamily="character")
+rmsk <- import.bed("hg38_rmsk_sorted.bed", 
+                           extraCols = extraCols) #import file
+
+rmsk_filtered = rmsk[  seqnames(rmsk) %in% paste("chr", c(1:22, "X", "Y", "M"), sep="")]
+#since the question specifies for the human genome, i create a filtered version of rmsk, with sequences from chromosomes 1 to 22, and chromosomes X and Y and M only. 
+
+hg38_promoters_filtered = hg38_promoters[  seqnames(hg38_promoters) %in% paste("chr", c(1:22, "X", "Y", "M"), sep="")]
+#since the question specifies for the human genome, i create a filtered version of hg38_promoters, with sequences from chromosomes 1 to 22, and chromosomes X and Y and M only. 
+
+hg38_promoters_filtered_reduced <- reduce(hg38_promoters_filtered) #by applying the function reduce, i combine sequences with overlapping bases into a single sequence. 
+```
+
+
+```{r}
+repeat_families<- unique(rmsk_filtered$repFamily) #using unique, i get a vector containing names of repeat families, with each name appearing once only
+
+no_of_sequences_overlapping_promoters_vector<- c() #i create an empty vector to store the number of sequences overlap promoters
+
+for (repeat_family in repeat_families){ #at each iteration, i focus on one repeat family
+  no_of_sequences_overlapping_promoters<-length(unique(queryHits(findOverlaps(rmsk_filtered[rmsk_filtered$repFamily==repeat_family],
+                                            hg38_promoters_filtered_reduced)))) #by applying findOverlaps and queryHits I get a vector of indexes, each corresponding to a repeat sequence that overlaps with a promoter sequence. after which, by applying unique, I get a vector of unique indexes. after which, by applying length, I get the length of the vector, which gives the number of repeat sequences that overlap with a promoter sequence.
+  
+  no_of_sequences_overlapping_promoters_vector<-c(no_of_sequences_overlapping_promoters_vector,no_of_sequences_overlapping_promoters) #at each iteration, i store the number of sequences in one repeat family that overlaps a promoter 
+}
+
+df= data.frame(repeat_family= repeat_families, no_of_sequences_overlapping_promoters=
+                 no_of_sequences_overlapping_promoters_vector)
+
+paste("the most common family of repeat elements that overlaps the promoters of protein-coding genes in the human genome is", repeat_families[which(df$no_of_sequences_overlapping_promoters == max(df$no_of_sequences_overlapping_promoters))])
+```
+
+##Question 2:
+
+__In Friday lecture we talked about modelling sequences using markov models. I've written a chunk of code below that implements this. It has two states intergenic (state I) and gc_rich (state P). The code generates a sequence of length 100 using this model.__
+
+The variables intergenic_emissions and gc_rich_emissions define the probability of a state generating an A, T, G or C.
+
+The transition matrix defines the probability of moving between the two states.
+
+```{r}
+seqs = c()
+states = c()
+state = "I"
+
+intergenic_emissions = c(A=0.25, T=0.25, G=0.25, C=0.25) #the probability of bases A, T, G and C respectively being generated by a state
+gc_rich_emissions = c(A=0.1, T=0.1, G=0.4, C=0.4) #the probability of bases A, T, G and C respectively being generated by a state
+
+transition_matrix = matrix(0, ncol=2, nrow=2) #create a transition matrix of 2 columns and 2 rows
+colnames(transition_matrix) = c("I", "P") 
+row.names(transition_matrix) = c("I", "P")
+transition_matrix["I",] = c(0.9, 0.1) #probability of transitioning from I to I and P respectively are 0.9 and 0.1 
+transition_matrix["P",] = c(0.3, 0.7) #probability of transitioning from P to I and P respectively are 0.3 and 0.7
+
+for(i in 1:100){
+      if(state=="I"){
+        seqs = c(seqs, sample(names(intergenic_emissions), 1, prob=intergenic_emissions))
+      }else{ #if(state=="P")
+        seqs = c(seqs, sample(names(gc_rich_emissions), 1, prob= gc_rich_emissions))
+      }
+    
+  if(state=="I"){
+        state = sample(names(transition_matrix["I",]), 1, prob=transition_matrix["I",])
+        states = c(states, state)
+  }else{ # (state=="P")
+        state = sample(names(transition_matrix["P",]), 1, prob=transition_matrix["P",])
+                states = c(states, state)
+  }
+}  
+print(seqs)
+print(states)
+```
+
+###Question 2a
+
+```{r}
+markov_modelling= function(transition_matrix){
+  seqs = c()
+  states = c()
+  state = "I"
+  intergenic_emissions = c(A=0.25, T=0.25, G=0.25, C=0.25)
+  gc_rich_emissions = c(A=0.1, T=0.1, G=0.4, C=0.4)
+
+  for(i in 1:100){
+      if(state=="I"){
+        seqs = c(seqs, sample(names(intergenic_emissions), 1, prob=intergenic_emissions))
+      }else{ #if(state=="P")
+        seqs = c(seqs, sample(names(gc_rich_emissions), 1, prob= gc_rich_emissions))
+      }
+    
+  if(state=="I"){
+        state = sample(names(transition_matrix["I",]), 1, prob=transition_matrix["I",])
+        states = c(states, state)
+  }else{ # (state=="P")
+        state = sample(names(transition_matrix["P",]), 1, prob=transition_matrix["P",])
+                states = c(states, state)
+  }
+  }  
+  return(states)
+}
+
+```
+
+Alter the probability of moving from I to P, how does this affect the output/what happens to the resulting set of states? (1 mark)
+```{r}
+
+transition_matrix_1<- transition_matrix
+
+for (i in seq(0, 1, 0.25)){
+  transition_matrix_1["I","P"]<- i
+  transition_matrix_1["I","I"]<- 1-i
+  print(paste("probability of moving from I to P is", i))
+  print(markov_modelling(transition_matrix_1))
+}
+
+```
+As the probability of moving from I to P increases from 0 to 1, the probability of moving from I to I decreases correspondingly. 
+As a result, we see shorter stretches of continuous I states, which are uninterrupted by P states (in other words, intergenic regions 
+are expected to become shorter and further away from one another). We also see longer stretches of continuous P states, uninterrupted by I states (in other words, GC rich regions are expected to become longer and closer to one another). 
+
+### Question 2b
+
+Alter the probability of moving from P to P, how does this affect the output/what happens to the resulting set of states? (1 mark)
+
+```{r}
+transition_matrix_1<- transition_matrix
+
+for (i in seq(0, 1, 0.25)){
+  transition_matrix_1["P","P"]<- i
+  transition_matrix_1["P","I"]<- 1-i
+  print(paste("probability of moving from P to P is", i))
+  print(markov_modelling(transition_matrix_1))
+}
+```
+As the probability of moving from P to P increases from 0 to 1, the probability of moving from P to I decreases correspondingly.
+As a result, we see shorter stretches of continuous I states, which are uninterrupted by P states (in other words, intergenic regions 
+are expected to become shorter and further away from one another). We also see longer stretches of continuous P states, uninterrupted by I states (in other words, GC rich regions are expected to become longer and closer to one another). 
+
+### Question 2c
+
+__Eureka ... we've found a new state (R) in the genome associated with replication origins and instead of having high levels of Gs and Cs, it has high levels of As and Ts. Alter the code above to allow for this new state.__
+
+__Set the probabilities to reflect the following statements__
+It is not possible to move from a (P)romoter to a (R)eplication origin (and vice versea)
+Replication origins are more common in the genome than promoters.
+
+(3 marks)
+
+```{r}
+seqs = c()
+states = c()
+state = "I"
+
+intergenic_emissions = c(A=0.25, T=0.25, G=0.25, C=0.25) #the probability of bases A, T, G and C respectively being generated by a state
+gc_rich_emissions = c(A=0.1, T=0.1, G=0.4, C=0.4) #the probability of bases A, T, G and C respectively being generated by a state
+replication_emissions = c(A=0.40, T=0.40, G=0.10, C=0.10)
+
+transition_matrix_new = matrix(0, ncol=3, nrow=3)
+colnames(transition_matrix_new) = c("I", "P", "R")
+row.names(transition_matrix_new) = c("I", "P", "R")
+transition_matrix_new["I",] = c(0.6, 0.15, 0.25)
+transition_matrix_new["P",] = c(0.3, 0.7, 0)
+transition_matrix_new["R",] = c(0.3, 0, 0.7)
+transition_matrix_new
+
+print("the probability of moving from a state to I, from the same state to P, and from the same state to R add up to 1. this is because the sum of these probabilities give us the probability of moving from a state to any other state, which is 1.")
+
+print(paste("because it is not possible to move from P to R (and vice versa), the probability of moving from P to R and R to P are", transition_matrix_new["P","R"], "and", transition_matrix_new["R","P"], "respectively"))
+
+print(paste("because R are more common than P, the probability of moving from I to R,", transition_matrix_new["I","R"], ",is greater than that of moving from I to P,", transition_matrix_new["I","P"]))
+```
+```{r}
+for(i in 1:100){
+  
+  if(state=="I"){
+        seqs = c(seqs, sample(names(intergenic_emissions), 1, prob=intergenic_emissions))}
+  else if(state=="P"){ 
+        seqs = c(seqs, sample(names(gc_rich_emissions), 1, prob= gc_rich_emissions))}
+  else{ #if(state=="T")
+    seqs = c(seqs, sample(names(replication_emissions), 1, prob=replication_emissions))}
+    
+  if(state=="I"){
+        state = sample(names(transition_matrix_new["I",]), 1, prob=transition_matrix_new["I",])
+        states = c(states, state)}
+  else if(state=="P"){
+        state = sample(names(transition_matrix_new["P",]), 1, prob=transition_matrix_new["P",])
+                states = c(states, state)}
+  else{ #if (state=="R")
+        state = sample(names(transition_matrix_new["R",]), 1, prob=transition_matrix_new["R",])
+                states = c(states, state)}
+}
+print(seqs)
+```
+```{r}
+print(states)
+```
+
+### Question 3
+
+__The file four_promoters.bed contains the locations of four promoters (+/- 1kb from their TSS) in the human genome (DPP6, CNPY1, SHH and EN2), . Extract the DNA sequence associated with each promoter,  calculate the CpG content for each sequence using a 200bp sliding window (i.e 200-mers) and visualise how this changes along the sequence (3 marks)__ 
+```{r, include= FALSE}
+library(GenomicFeatures)
+library(biomaRt)
+```
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-4") #set working directory
+four_promoters = import.bed("four_promoters.bed") #import file
+```
+
+```{r, eval=FALSE}
+DPP6<- extractAt(Hsapiens$chr7, ranges(four_promoters)[which(four_promoters$name== "DPP6")])[[1]]
+CNPY1<- extractAt(Hsapiens$chr7, ranges(four_promoters)[which(four_promoters$name== "CNPY1")])[[1]]
+SHH<- extractAt(Hsapiens$chr7, ranges(four_promoters)[which(four_promoters$name== "SHH")])[[1]]
+EN2<- extractAt(Hsapiens$chr7, ranges(four_promoters)[which(four_promoters$name== "EN2")])[[1]]
+```
+
+```{r, eval=FALSE}
+#building a function for fun
+#this function takes a promoter sequence, the promoter's name, window length, visualization preference
+#and returns the CpG content for the promoter sequence using a sliding window of a specified window length
+#and visualizes how this changes along the promoter sequence
+
+sliding_window= function(promoter_sequence, promoter_name, window_length, visualization){
+  CpG_content_vector <- c()
+  base_at_start_of_window <- c()
+  for (base_number in seq(1, nchar(promoter_sequence)- (window_length-1),1)){
+    two_hundred_mer<- extractAt(promoter_sequence, IRanges(start=base_number, end=base_number+199))[[1]]
+    CpG_content<- 100* dinucleotideFrequency(two_hundred_mer)[["CG"]]/ sum(dinucleotideFrequency(two_hundred_mer))
+    CpG_content_vector<- c(CpG_content_vector,CpG_content)
+    base_at_start_of_window<- c(base_at_start_of_window, base_number)}
+    
+    print(head(data.frame(base_at_start_of_window= base_at_start_of_window, CpG_content= CpG_content_vector)))
+    
+    if (visualization== "barplot"){
+    barplot(CpG_content_vector, 
+            names.arg =base_at_start_of_window,
+            main= paste("CpG content for", promoter_name,"promoter sequence using a", window_length,"bp sliding window"),
+            las = 2,
+            cex.names = 0.8,
+            xlab= paste("position of first base in", window_length, "bp sliding window"),
+            ylab= "CpG content (%)" )}
+    
+    else if (visualization== "plot"){
+    plot(CpG_content_vector, 
+         main= paste("CpG content for", promoter_name,"promoter sequence using a", window_length,"bp sliding window"),
+         las = 2,
+         xlab= paste("position of first base in", window_length, "bp sliding window"),
+         ylab= "CpG content",
+         type = "l")}
+    
+    else if (visualization== "both"){
+      barplot(CpG_content_vector, 
+            names.arg =base_at_start_of_window,
+            main= paste("CpG content for", promoter_name,"promoter sequence using a", window_length,"bp sliding window"),
+            las = 2,
+            cex.names = 0.8,
+            xlab= paste("position of first base in", window_length, "bp sliding window"),
+            ylab= "CpG content")
+      
+      plot(CpG_content_vector, 
+         main= paste("CpG content for", promoter_name,"promoter sequence using a", window_length,"bp sliding window"),
+         las = 2,
+         xlab= paste("position of first base in", window_length, "bp sliding window"),
+         ylab= "CpG content",
+         type = "l")}
+    
+    else {print("invalid visualization preference")}
+}
+
+sliding_window(DPP6, "DPP6", 200, "both")
+```
+```{r, eval=FALSE}
+sliding_window(CNPY1, "CNPY1", 200, "both")
+```
+
+```{r, eval=FALSE}
+sliding_window(SHH, "SHH", 200, "both")
+```
+
+
+```{r, eval=FALSE}
+sliding_window(EN2, "EN2", 200, "both")
+```
+
+
+```{r}
+sessionInfo()
+```

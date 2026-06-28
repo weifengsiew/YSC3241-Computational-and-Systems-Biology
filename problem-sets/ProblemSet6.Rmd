@@ -1,0 +1,244 @@
+---
+title: "ProblemSet6"
+author: "Hello world"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+  
+  
+# Problem Set 6 -Genetic Variation
+  
+## Question 1 
+
+__The file simulated_gwas.txt contains genotypes for 20000 SNPs for 2000 individuals from a simulated GWAS study. There are 500 cases and 1500 controls (see the column names in the file).__ 
+
+__Which of the SNPs have genotype frequencies that are not the same in cases and controls .... (i.e which SNPs are significantly differ between cases and controls)? __ (3 marks)
+
+As seen below, each row corresponds to a SNP, thus there are 20 000 rows. Each column corresponds to one individual, hence there are 2000 columns. 
+
+```{r}
+simulated_gwas <- read.delim("../data/problem-set-6/simulated_gwas.txt") #import file
+#simulated_gwas #examine file
+```
+
+```{r}
+case_column_numbers <- which(colnames(simulated_gwas) %in% paste("case", 1:500, sep="")) #this vector stores the column numbers of cases
+control_column_numbers <- which(colnames(simulated_gwas) %in% paste("control", 1:1500, sep="")) #this vector stores the column numbers of controls
+print(paste("it is", length(case_column_numbers) == 500 , "that there are 500 column numbers in case_column_numbers")) #we verify that there are 500 column numbers as expected
+print(paste("it is", length(control_column_numbers) == 1500 , "that there are 1500 column numbers in control_column_numbers")) #we verify that there are 1500 column numbers as expected
+```
+
+```{r, results= FALSE}
+time_start <- Sys.time()
+
+count_genotypes <- function(genotypes) {
+  counts <- table(factor(genotypes, levels = c("AA", "Aa", "aa")))
+  as.integer(counts)
+}
+
+case_genotypes <- as.data.frame(t(apply(simulated_gwas[, case_column_numbers], 1, count_genotypes)))
+control_genotypes <- as.data.frame(t(apply(simulated_gwas[, control_column_numbers], 1, count_genotypes)))
+colnames(case_genotypes) <- c("AA", "Aa", "aa")
+colnames(control_genotypes) <- c("AA", "Aa", "aa")
+row.names(case_genotypes) <- rownames(simulated_gwas)
+row.names(control_genotypes) <- rownames(simulated_gwas)
+
+time_elapsed <- as.numeric(Sys.time() - time_start)
+print(paste("time elapsed (min):", time_elapsed/60))
+```
+
+```{r}
+time_start <- Sys.time()
+
+p_values <- vapply(seq_len(nrow(simulated_gwas)), function(i) {
+  chisq.test(rbind(unlist(case_genotypes[i, ]), unlist(control_genotypes[i, ])))$p.value
+}, numeric(1))
+
+sig_diff <- data.frame(
+  p_val = p_values,
+  sig_diff_at_alpha_0.05over20000 = p_values < 0.05/20000,
+  row.names = rownames(simulated_gwas)
+)
+
+time_elapsed <- as.numeric(Sys.time() - time_start)
+print(paste("time elapsed (min):", time_elapsed/60))
+```
+
+```{r}
+print("at the 0.05/20000 significance level (Bonferroni correction), the following SNPs significantly differ between case and control")
+rownames(sig_diff)[which(sig_diff$sig_diff_at_alpha_0.05over20000 == TRUE)]
+```
+
+## Question 2
+
+
+__Write a function genotypeToAllele that takes a matrix of genotypes and converts them to a matrix of allele frequencies?.__(2 mark)
+
+```{r question2}
+
+m= matrix(0, ncol=3, nrow=2) #create a transition matrix of 2 columns and 2 rows
+colnames(m) = c("AA", "Aa", "aa") #the 1st, 2nd and 3rd column from left to right have names AA, Aa, aa
+row.names(m) = c("case", "control") #the 1st and 2nd row from top to bottom have names case and control
+  
+m["case", "AA"]<- sum(simulated_gwas[1,case_column_numbers] == "AA") 
+m["case", "Aa"]<- sum(simulated_gwas[1,case_column_numbers] == "Aa" | simulated_gwas[1,case_column_numbers] == "aA")
+m["case", "aa"]<- sum(simulated_gwas[1,case_column_numbers] == "aa")
+m["control", "AA"]<- sum(simulated_gwas[1,control_column_numbers] == "AA")
+m["control", "Aa"]<- sum(simulated_gwas[1,control_column_numbers] == "Aa" |
+                           simulated_gwas[1,control_column_numbers] == "aA")
+m["control", "aa"]<- sum(simulated_gwas[1,control_column_numbers] == "aa")
+
+m
+```
+
+```{r}
+genotypeToAllele = function(genotypeTable){
+  r0<- genotypeTable["case", "AA"]
+  r1<- genotypeTable["case", "Aa"]
+  r2<- genotypeTable["case", "aa"]
+  s0<- genotypeTable["control", "AA"]
+  s1<- genotypeTable["control", "Aa"]
+  s2<- genotypeTable["control", "aa"]
+  
+  alleleFrequencies<- matrix(0, ncol=2, nrow=2)
+  colnames(alleleFrequencies) = c("A", "a") 
+  row.names(alleleFrequencies) = c("case", "control") 
+  
+  alleleFrequencies["case","A"]<- 2*r0 +r1
+  alleleFrequencies["case","a"]<- r1 + 2*r2
+  alleleFrequencies["control","A"]<- 2*s0 + r1
+  alleleFrequencies["control","a"]<- s1 + 2*s2
+  
+  return(alleleFrequencies)}
+
+```
+
+```{r}
+genotypeToAllele(m)
+```
+
+## Question 3
+
+
+__Using the GWAS catalog - what percentage of GWAS SNPs overlap with protein-coding genes?__ (1 mark)
+
+```{r}
+library(GenomicFeatures)
+getwd() #get working directory 
+setwd("../data/shared") #set working directory 
+hg.gtf.db <- makeTxDbFromGFF("Homo_sapiens.GRCh38.108.chr.gtf", format="gtf" ) #create hg.gtf.db
+
+ensembl.genes = genes(hg.gtf.db) #get information regarding genes
+
+# human = useEnsembl(biomart="ENSEMBL_MART_ENSEMBL",host="asia.ensembl.org", dataset="hsapiens_gene_ensembl", version="108") #this server is not working
+
+library(biomaRt)
+human = useEnsembl(biomart="ENSEMBL_MART_ENSEMBL",mirror = "asia", dataset="hsapiens_gene_ensembl", version="108") 
+bm.annotations = getBM(attributes=c("ensembl_gene_id", "entrezgene_id", "gene_biotype", "hgnc_symbol", "description"), mart=human, filters="ensembl_gene_id", values=ensembl.genes$gene_id, uniqueRows=TRUE)
+
+ensembl.genes$hgnc_symbol = bm.annotations$hgnc_symbol[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for hgnc symbol
+ensembl.genes$gene_biotype = bm.annotations$gene_biotype[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for gene biotype
+ensembl.genes$description = bm.annotations$description[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for description
+ensembl.genes$entrezgene = bm.annotations$entrezgene[ match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ] #add column for entrezgene
+```
+
+```{r}
+protein_coding_genes_in_human_genome <- ensembl.genes[!is.na(ensembl.genes$gene_biotype) & ensembl.genes$gene_biotype == "protein_coding"] #genes in the human genome with a protein coding biotype (i.e. not NA)
+```
+
+```{r question3a}
+library(gwascat)
+library(stringr)
+getwd() #get working directory 
+setwd("../data/problem-set-6") #set working directory 
+ebicat38 = readRDS("gwascat.rds")
+ucsc.levels <- str_replace(string=paste("chr",seqlevels(ebicat38),sep=""), pattern="chrMT", replacement="chrM") # changes name of chrM
+seqlevelsStyle(ebicat38) <- seqlevelsStyle(protein_coding_genes_in_human_genome) 
+```
+
+```{r}
+ebicat38
+```
+
+```{r}
+no_of_gwas_SNPs_overlapping_with_pcgene<- length(unique(subjectHits(findOverlaps(protein_coding_genes_in_human_genome, unique(ebicat38)))))
+#by applying subjectHits, i get a vector of indexes, each corresponding to a sequence in ebicat38 that overlaps with protein_coding_genes_in_human_genome
+#after which, i apply unique to the resultant vector, thus getting a vector of unique indexes 
+#after which, i apply length, thus getting the number of sequences in ebicat38 that overlaps with protein_coding_genes_in_human_genome. this is equal to the number of SNPs in ebicat38 that overlaps with protein_coding_genes_in_human_genome, since SNPs involve one base only.
+```
+
+```{r}
+total_no_of_gwas_SNPs <- length(unique(ebicat38))
+#this gives me the total number of GWAS SNPs
+```
+
+```{r}
+pct_of_gwas_SNPs_overlapping_with_pcgene<- 100* no_of_gwas_SNPs_overlapping_with_pcgene / total_no_of_gwas_SNPs
+
+print(paste("percentage of GWAS SNPs overlapping with protein coding genes:", pct_of_gwas_SNPs_overlapping_with_pcgene, "%"))
+```
+
+__Using the GWAS catalog - what percentage of GWAS SNPs overlap with regions that code for protein?__ (1 mark)
+```{r question3b}
+hg38_cdsByGene = cdsBy(hg.gtf.db, "gene")
+protein_coding_region = hg38_cdsByGene[ensembl.genes$gene_id[!is.na(ensembl.genes$gene_biotype) & ensembl.genes$gene_biotype == "protein_coding"]] 
+protein_coding_region= reduce(protein_coding_region, ignore.strand=TRUE)
+```
+
+```{r}
+no_of_gwas_SNPs_overlapping_with_protein_coding_region<- length(unique(subjectHits(findOverlaps(protein_coding_region, unique(ebicat38)))))
+```
+
+```{r}
+total_no_of_gwas_SNPs <- length(unique(ebicat38))
+#this gives me the total number of GWAS SNPs
+```
+
+```{r}
+pct_of_gwas_SNPs_overlapping_with_protein_coding_region<- 100* no_of_gwas_SNPs_overlapping_with_protein_coding_region/ total_no_of_gwas_SNPs
+
+print(paste("percentage of GWAS SNPs overlapping with protein coding region:", pct_of_gwas_SNPs_overlapping_with_protein_coding_region, "%"))
+```
+
+##Question 4
+
+__Which GWAS SNPs are strongly associated with the trait Depression and alcohol dependence__? (1 mark)
+
+```{r}
+print("these GWAS SNPs are strongly associated with the trait Depression and alcohol dependence")
+ebicat38$SNPS[which(ebicat38$`DISEASE/TRAIT`== "Depression and alcohol dependence")]
+```
+
+__Which protein-coding gene do these SNPs overlap?__ (1 mark)
+```{r}
+indexes<- queryHits(findOverlaps(protein_coding_genes_in_human_genome, ebicat38[which(ebicat38$`DISEASE/TRAIT`== "Depression and alcohol dependence")]))
+
+print("these GWAS SNPs overlap the following protein coding genes")
+protein_coding_genes_in_human_genome[indexes]$hgnc_symbol
+```
+
+__Do these genes/associations make sense sense given the trait you're investigating?__(1 mark)
+
+```{r eval=FALSE}
+protein_coding_genes_in_human_genome[indexes]$description
+```
+
+Some of the genes make sense. First of all, they cohere with Edward et al. (2012) findings that the genes
+WDR7, OPA3, SPATA13 and FAF1 are associated with depression and alcohol dependence. Additionally, McClintick et al. (2019)
+also found that MICU3 is associated with alcohol dependence. Lastly, the OXTR (oxytocin receptor) gene also makes sense, because "Oxytocin is nonapeptide that exerts a wide spectrum of central and peripheral effects, ranging from the modulation of stress and neuroendocrine response to the establishment of complex social behaviors", according to Gimpl et al. (2001). Given its important role in the nervous system, it is likely to play a role in depression and alcohol dependence. 
+
+Bibliography
+
+Edwards, A. C., Aliev, F., Bierut, L. J., Bucholz, K. K., Edenberg, H., Hesselbrock, V., Kramer, J., Kuperman, S., Nurnberger, J. I., Jr, Schuckit, M. A., Porjesz, B., & Dick, D. M. (2012). Genome-wide association study of comorbid depressive syndrome and alcohol dependence. Psychiatric genetics, 22(1), 31–41. https://doi.org/10.1097/YPG.0b013e32834acd07
+
+Gimpl, G., & Fahrenholz, F. (2001). The oxytocin receptor system: Structure, function, and regulation. Physiological Reviews, 81(2), 629–683. https://doi.org/10.1152/physrev.2001.81.2.629
+
+McClintick, J. N., Tischfield, J. A., Deng, L., Kapoor, M., Xuei, X., & 
+Edenberg, H. J. (2019). Ethanol activates immune response in lymphoblastoid cells. Alcohol (Fayetteville, N.Y.), 79, 81–91. https://doi.org/10.1016/j.alcohol.2019.01.001
+
+```{r}
+sessionInfo()
+```

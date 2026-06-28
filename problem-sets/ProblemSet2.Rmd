@@ -1,0 +1,168 @@
+---
+title: "ProblemSet2"
+author: "Awesome computational biologist in training"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problem Set 1
+
+Week II: Sequence alignment 
+
+## Question 1
+
+__Write a function (called hamming) that takes two strings and returns the Hamming distance between them__ (2 marks)
+```{r question1}
+
+#write a function (called hamming) that takes two strings and returns the Hamming distance between them
+hamming <- function(seq1, seq2){
+  distance<- 0 
+  seq1<- strsplit(seq1, "")[[1]]
+  seq2<- strsplit(seq2, "")[[1]]
+  
+  for (i in 1:length(seq1)){
+    if (seq1[i]!= seq2[i]){
+      distance<- distance + 1}
+    else {distance <- distance}
+  }
+  print(distance)
+}
+
+#test the function to see if it returns the hamming distance
+
+seq1 = "ATGC"
+seq2 = "TTGC"
+seq3 = "TTTC"
+
+library(Biostrings)
+
+hamming(seq1,seq2)
+stringDist(c(seq1,seq2),method= "hamming")
+
+hamming(seq1,seq3)
+stringDist(c(seq1,seq3),method= "hamming")
+```
+
+If you want to make sure you're getting the right answer - remember you can use stringDist to check.
+
+## Question 2
+
+__Using this function, calculate the hamming distance between the proteins found in the file aa_seq.fa __ (1 marks)
+
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-2") #set working directory 
+aa_seq= readAAStringSet("aa_seq.fa")
+
+#length(aa_seq)
+#as.character(aa_seq[1])
+#as.character(aa_seq[2])
+#hamming(as.character(aa_seq[1]),as.character(aa_seq[2]))
+
+#create a matrix. the value in each cell represents the distance between two sequences.
+#the sequence number corresponds to the row and column number of the cell. 
+distance_matrix<- matrix(0, nrow = length(aa_seq), ncol = length(aa_seq))
+
+#create a for loop to find the distance between the i-th and a-th sequence, for all i and a
+for (i in 1: length(aa_seq)){
+  for (a in 1: length(aa_seq)){
+    if (i==a){
+      distance_matrix[i,a] <- NA}
+    else if (i!= a)
+      {distance_matrix[i,a] <- hamming(as.character(aa_seq[i]), as.character(aa_seq[a]))}
+  }}
+
+#in this matrix, the value in each cell represents the distance between two sequences.
+#the sequence number corresponds to the row and column number of the cell. 
+distance_matrix 
+
+#test if the hamming distance is correct
+
+distance_matrix[3,5]
+stringDist(c(aa_seq[3],aa_seq[5]),method= "hamming") 
+```
+
+__Given the hamming distances between these sequences which of the sequences is the most different (on average) to the other sequences__ (1 mark)
+```{r}
+#create a matrix
+average_difference_matrix<- matrix(0, nrow = 1, ncol = length(aa_seq))
+
+#store the mean distance in each column in a matrix
+for (i in 1: length(aa_seq)){
+    average_difference_matrix[1,i]<- mean(distance_matrix[,i], na.rm= TRUE)}
+
+average_difference_matrix
+
+which(average_difference_matrix== max(average_difference_matrix))
+```
+Sequence 1 is the most different (on average) to the other sequences
+
+__Order the sequences in order of their similarity to seq5__ (1 mark)
+
+```{r}
+difference_df= data.frame(sequence= 1:10, difference_from_5= distance_matrix[5,])
+difference_df <- difference_df[order(difference_df$difference_from_5, decreasing=TRUE),]
+
+print(difference_df$sequence) #from least similar (sequence 7) to most similar (sequence 5)
+```
+From least to most similar to sequence 5: 7, 6, 1, 4, 8, 2, 3, 9, 10,  5
+
+## Question 3 
+
+__Read in the sequences in file ps2_sequences.fa, find what is the most abundant 6-mer for each of the sequences. Please make a function to do this for individual sequences.__ (4 marks)
+
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-2") #set working directory 
+ps2_sequences=readDNAStringSet("ps2_sequences.fa")
+ps2_sequences
+#six_mers <- c(as.character(substring(ps2_sequences[1],1,6)))
+#six_mers <- c(six_mers, as.character(substring(ps2_sequences[1],2,7)))
+
+#ps2_sequences[1]
+
+#six_mers<- c()
+#for (i in 6: nchar(ps2_sequences[1])-5){
+#  six_mers<- c(six_mers, as.character(substr(ps2_sequences[1],i,i+5)))
+#}
+#six_mers
+
+most_abundant_sixmer<- function(sequence){
+  six_mers<- c()
+  for (i in 6: nchar(sequence)-5){
+  six_mers<- c(six_mers, as.character(substr(sequence,i,i+5)))}
+  names(which.max(table(six_mers)))
+}
+
+most_abundant_sixmer(ps2_sequences[1])
+
+most_abundant_sixmer_vector<- c()
+for (i in 1:length(ps2_sequences)){
+  most_abundant_sixmer_vector<- c(most_abundant_sixmer_vector,most_abundant_sixmer(ps2_sequences[i]))
+}
+
+most_abundant_sixmer_df= data.frame(sequence= 1:5, most_abundant_sixmer= most_abundant_sixmer_vector)
+
+most_abundant_sixmer_df
+```
+
+NB you can solve this is lots of different ways. 
+
+__Given what the most abundant 6-mer in sequence 1 is ... what do you think this sequence might represent__ (1 mark).
+
+```{r, eval=FALSE}
+
+```
+
+This might represent a telomeric sequence
+
+```{r}
+sessionInfo()
+```

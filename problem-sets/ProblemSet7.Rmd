@@ -1,0 +1,129 @@
+---
+title: "ProblemSet7"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problem Set 7
+
+Most of the questions on this weeks problem set are about making sure you understand the process of designing an RNA-seq experiment, and using Linux.
+
+## Question 1:
+
+__Describe the design of an RNA-seq experiment whose purpose is  order to investigate the differences in expression of both protein-coding and non-coding RNAs in two human cell lines following treatment of each cell line with a drug, and _importantly_ why have you made the choices you have?.__ (4 marks) 
+
+```{r, eval=FALSE}
+The following procedures are to be carried out within one day. If we need to split across days, we should evenly split controls and treatments across days. Moreover, take note to not confound the techical and experimentaln variables, so as to reduce batch effects.
+
+In this experiment, we have two cell lines. For each cell line, we hope to investigate the differences in expression of both protein coding and non-coding RNAs following treatment with a drug. Therefore, we have four conditions: (1) cell type I without drug treatment (control), (2) cell type I with drug treatment (treatment), (3) cell type II without drug treatment (control), (4) cell type II with drug treatment (treatment). For each condition, prepare 4 samples, since this experiment is  performed in vivo. By having 4 replicates, this increases the power to detect genes for both highly and lowly expressed genes, as compared the smaller replicate numbers.
+
+After which, isolate RNA from the cells in each sample. Quantify the RNA Integrity Number (RIN) for each sample to ensure an acceptable RIN. Note that we do not deplete the rRNA in each sample, because we are interested in both protein-coding and non-coding RNAs. 
+
+For each sample, break the remaining RNA into fragments of between 200-400 bps. This is because we cannot sequence a whole transcript using Illumina, we need to fragment, thus making it easier to load the instrument. 
+
+Carry out reverse transcription to obtain DNA fragments. After which using Illumina, carry out paired end sequencing on the resultant DNA fragments, with a read depth of around 30-50 million reads per sample. By having adequate read depth, this increases the power to detect genes for both highly and lowly expressed genes, as compared the smaller read depths. We use paired-end sequencing because this study concerns both protein-coding and non-coding sequences. While paired end sequencing may be more expensive, it provides better reads for splice isoforms and exon-exon junctions.
+
+To make technical replicates, repeat sequencing from samples of the biological replicates. This would produce sequencing results that are more accurate, allowing a better sensing of the error rate caused by sequencing issues. 
+
+Use FastQC to ensure adequate quality of the resultant reads. 
+
+Then, use STAR to align the reads to the human genome. 
+
+For each sample, use featureCounts to quantify the number of reads overlapping with each gene (both protein coding and non-protein coding). 
+
+Subsequently, for each sample, calculate the Transcript Per Kilobase Million for each gene. 
+
+Lastly, use DESeq2 to carry out differential expression analyses, calculating the fold change from the condition without drug treatment, to the condition with drug treatment, for each cell type, and their corresponding p-values. We use the bonferroni correction to calculate the significance level, and those fold changes with p-values lower than the resultant significance level will be considered statistically significant.
+```
+
+## Question 2:
+
+Login into cbio.yale-nus.edu.sg and make sure the file Mus_musculus.GRCm39.102.chr.gtf and the results from featureCounts in your home directory. Most of theYou should not use R to answer these questions but use Linux commands. Either enter the commands you would use to perform these tasks below and submit a .sh file containing them of all them. 
+
+
+a) how many lines in the file contain information related to the exons of Nfkb2? (1 mark)
+
+```{eval=FALSE}
+[swf371@cbio ~]$ grep exon Mus_musculus.GRCm39.109.chr.gtf | grep Nfkb2 | wc -l
+
+#270 lines
+```
+
+
+b) At which line number does the first record about Nfkb2 appear in the line (1 mark)
+
+
+```{eval=FALSE}
+[swf371@cbio ~]$ cat -n Mus_musculus.GRCm39.109.chr.gtf | grep Nfkb2 | head -1
+
+#line 1876403
+```
+
+c) make a bed file containing all the annotated exons of Shh, Irx3 and Porcn - show the command to do this and upload the bedfile to Canvas as well? (1 marks)
+
+```{eval=FALSE}
+[swf371@cbio ~]$ touch problemset7_q2c.bed
+[swf371@cbio ~]$ grep exon Mus_musculus.GRCm39.109.chr.gtf | grep 'Shh\|Irx3\|Porcn' |cut -f1,4-5,7 | cat >> problemset7_q2c.bed
+```
+```{r}
+getwd() #get working directory #which folder is it accessing?
+setwd("../data/problem-set-7") #set working directory #access this folder
+library(rtracklayer)
+problemset7_q2c.gr = import.bed("problemset7_q2c.bed")
+head(problemset7_q2c.gr)
+```
+
+## Question 3: 
+
+Looking at the file you generated from featureCounts .... you can use either Linux or R to solve the following questions
+
+a) How many reads are mapping to P53, Kras and Myc in your sample? 
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-7") #set working directory 
+read_counts = read.delim("test_panc_counts_2.txt", sep="\t", comment.char="#", row.names=1)
+read_counts$Chr <- sapply(strsplit(read_counts$Chr, split= ";"), unique)
+```
+
+```{r}
+gene_annotations <- rtracklayer::import("../data/shared/Mus_musculus.GRCm39.109.chr.gtf")
+gene_annotations <- gene_annotations[gene_annotations$type == "gene"]
+gene_metadata <- unique(as.data.frame(mcols(gene_annotations))[, c("gene_id", "gene_name", "gene_biotype")])
+
+read_counts$mgi_symbol = gene_metadata$gene_name[ match(row.names(read_counts), gene_metadata$gene_id) ]
+read_counts$gene_biotype = gene_metadata$gene_biotype[ match(row.names(read_counts), gene_metadata$gene_id) ]
+read_counts$status = NA
+read_counts$description = NA
+read_counts$entrezgene = NA
+```
+
+```{r}
+print(paste(read_counts$test.mT9.Aligned.sortedByCoord.out.bam[which(read_counts$mgi_symbol %in% "Trp53")], "reads are mapping to Trp 53"))
+print(paste(read_counts$test.mT9.Aligned.sortedByCoord.out.bam[which(read_counts$mgi_symbol %in% "Kras")], "reads are mapping to Kras"))
+print(paste(read_counts$test.mT9.Aligned.sortedByCoord.out.bam[which(read_counts$mgi_symbol %in% "Myc")], "reads are mapping to Myc"))
+```
+
+b) How many genes expressed genes (i.e. counts > 0) are located on each chromosome in your sample?
+
+```{r}
+print("number of genes expressed per chromosome")
+table(read_counts$Chr[which(read_counts$test.mT9.Aligned.sortedByCoord.out.bam >0)])[c(seq(1,19,1), "X", "Y")]
+```
+
+c) Which gene in your sample has read counts closest to the median number of reads (excluding genes with - counts) ?
+
+```{r}
+median_read_count <- median(read_counts$test.mT9.Aligned.sortedByCoord.out.bam[which(read_counts$test.mT9.Aligned.sortedByCoord.out.bam >0)])
+smallest_difference_from_median_read_count <- min(abs(read_counts$test.mT9.Aligned.sortedByCoord.out.bam - median_read_count))
+print("the following genes have read counts closest to the median number of reads:")
+print(paste(read_counts$mgi_symbol[which(abs(read_counts$test.mT9.Aligned.sortedByCoord.out.bam - median_read_count) == smallest_difference_from_median_read_count)], collapse= " , "))
+```
+
+```{r}
+sessionInfo()
+
+```

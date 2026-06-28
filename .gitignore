@@ -1,0 +1,21 @@
+# macOS and editor noise
+.DS_Store
+.Rproj.user/
+
+# R session state and generated caches
+.Rhistory
+.RData
+.RDataTmp*
+*.RData
+*.RDataTmp*
+cache/
+figure/
+*_cache/
+*_files/
+
+# Sensitive/local-only material.
+private/
+# Keep large local datasets out of git.
+data/*
+!data/README.md
+

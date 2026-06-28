@@ -1,0 +1,179 @@
+---
+title: "ProblemSet3"
+author: "Awesome computational biologist in training"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problem Set 3
+
+Week III: Sequence alignment and genome assembly
+
+### Question 1 
+
+__Globally align the following two sequences, using a gap opening penalty of 0 and a gap extension of 1 (look at the documentation for information on how to do this (?pairwiseAlignment)__ (1 mark) 
+
+```{r question1}
+library(Biostrings) 
+library(pwalign)
+library(xtable) 
+
+seq1 = "TGGTACACGAAGGCATAAGT"
+seq2 = "CATGGCTGGTGCTCCTGCTTGGCATGAAGCTGAATAAGAA"
+
+mapping <- diag(4)
+dimnames(mapping) <- list(DNA_BASES, DNA_BASES)
+mapping[1,] = c(1,-2,-1,-2)  
+mapping[2,] = c(-2,1,-2,-1)  
+mapping[3,] = c(-1,-2,1,-2)  
+mapping[4,] = c(-2,-1,-2,1)  
+
+pairwiseAlignment(seq1, seq2,
+                  type="global",
+                  substitutionMatrix=mapping, fuzzyMatrix=NULL, 
+                  gapOpening=0, gapExtension=1)
+```
+
+__Repeat this altering the gapExtension penalty for different values. What happens to the resulting alignments? __ (2 marks)
+```{r}
+for (i in seq(0, 12, 1)){
+  result= pairwiseAlignment(seq1, seq2, type="global", substitutionMatrix = mapping, gapOpening=0, gapExtension = i, scoreOnly = FALSE)
+  print(paste("gapExtension penalty:", i))
+  print(result)
+}
+```
+As the gap extension penalty increases, the score decreases because there is a higher penalty for every gap added. 
+Moreover, the number of indels from the read sequence to the reference sequence decreases, while the number of substitutions
+from the read sequence to the reference sequence increases. This is because increasing the gap extension penalty, while holding other 
+penalties constant, result in gaps being increasingly penalized relative to substitutions. 
+
+### Question 2
+
+__The sequence below is the sequence of the homeobox domain, which of the sequences in the file (prot_seq.fa) has a homeobox domain - remember to justify your answer, what parameters did you use and why?__ (3 marks )
+
+Sequence 1 and 8 have a homeobox domain
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-3") #set working directory 
+prot_seq= readAAStringSet("prot_seq.fa")
+```
+```{r}
+prot_seq
+```
+```{r}
+homeodomain_seq="RRRKRTAYTRYQLLELEKEFHFNRYLTRRRRIELAHSLNLTERHIKIWFQNRRMKWKKEN"
+```
+
+```{r}
+data("BLOSUM62", package = "pwalign")
+
+for (i in 1:length(prot_seq)) {
+  result <- pairwiseAlignment(homeodomain_seq, prot_seq[[i]], type = "local", substitutionMatrix =
+                                BLOSUM62, gapOpening = 0, gapExtension =12, scoreOnly=FALSE)
+  print(paste("sequence being aligned to homeodomain sequence:", names(prot_seq[i])))
+  print(result)
+}
+```
+Sequence 8 has a homeobox domain. This is because the substring in sequence 8 that is most similar
+to the homeobox domain sequence has the same length as the homeobox domain sequence, which is not 
+observed for other sequences. Moreover, it has the highest alignment score of 274 amongst all the
+sequences. I chose to do local alignment because finding the substring in X (substring in protein sequence) 
+which is most similar to the substring in Y (homeobox domain) requires local alignment. 
+I chose BLOSUM62 as the substitution matrix because it is based on looking at amino acid substitutions 
+at highly conserved stretches of protein, and homeobox domains are highly conserved. Moreover, BLOSUM62 
+is based on local alignments. I used a gap extension penalty of -12. This is because the gap penalty that
+we use for DNA alignments is -4 in general. 1 gap in a protein sequence corresponds to 3 gaps in DNA sequence because
+an amino acid is coded by a codon, thus -4 x 3 bases = -12.
+
+### Question 3
+
+__Write a function sequenceGenome that given a genome (i.e. chr22.fa), generates a set of random reads (i.e 10000) of a specific length (i.e. 50bp) __ (3 marks)
+
+```{r}
+getwd() #get working directory 
+setwd("../data/problem-set-3") #set working directory 
+chr22genome = readDNAStringSet("chr22.fa")
+```
+
+```{r}
+#create for loop for 10 reads of length 4 from chr22genome
+read_vector= c()
+for (i in 1:10){
+  start= sample (1:width(chr22genome)-(4-1), size=1 , replace= TRUE)
+  read<- as.character(extractAt(chr22genome, IRanges(start=start, end=start+4-1))[[1]])
+  read_vector = c(read_vector, read)
+  }
+read_vector
+```
+
+```{r}
+#build function 
+
+sequenceGenome <- function(genome_name, read_length, number_of_reads){
+  if (typeof(genome_name) == "S4" && class(read_length)== "numeric" && class(number_of_reads)== "numeric" && read_length<= width(genome_name)){
+    read_vector= c()
+    for (i in 1:number_of_reads){
+      start= sample (1:width(genome_name)-(read_length-1), size=1 , replace= TRUE)
+      read= as.character(extractAt(genome_name, IRanges(start=start, end=start+read_length-1))[[1]])
+      read_vector = c(read_vector, read)
+    }
+    random_reads= DNAStringSet(read_vector)
+    return(random_reads)}
+  else { print ("Please enter the correct inputs: genome_name (DNAStringSet object of length 1), read_length (integer), number_of_reads (integer)")}
+}
+                              
+random_reads= sequenceGenome(chr22genome, 10, 10)
+
+random_reads
+```
+
+### Question 4 
+__The function you made above did not allow for any variation in the reads - ( either due to sequencing error or due to variation) ... modify your function to randomly alter one base pair in each read to a different nucleotide (you will need to look for a function in Bioconductor/Biostrings that can alter one nucleotide)__ (1 marks)
+
+```{r}
+#randomly alter one base pair in one read to a different nucleotide
+
+read= "ATGC" 
+random_nucleotide_number= sample (1:nchar(read), size=1 , replace= TRUE) #randomly choose a number between 1 and the number of bases in the read
+random_nucleotide= strsplit(read, "")[[1]][random_nucleotide_number] #choose a base that corresponds to the number above
+change_to= sample (c("A", "G", "T", "C")[!c("A", "G", "T", "C")%in% c(random_nucleotide)], size=1 , replace= TRUE) #choose a random base that is not the base above
+altered_read= replaceLetterAt(DNAString(read), c(random_nucleotide_number), change_to) #alter the read
+altered_read #exhibit the altered read
+```
+
+```{r}
+
+sequenceGenome_withErrors <- function(genome_name, read_length, number_of_reads){
+  if (typeof(genome_name) == "S4" && class(read_length)== "numeric" && class(number_of_reads)== "numeric" && read_length<= width(genome_name)){
+    read_vector= c()
+    for (i in 1:number_of_reads){
+      start= sample (1:width(genome_name)-(read_length-1), size=1 , replace= TRUE)
+      read= as.character(extractAt(genome_name, IRanges(start=start, end=start+read_length-1))[[1]])
+      random_nucleotide_number= sample (1:nchar(read), size=1 , replace= TRUE)
+      random_nucleotide= strsplit(read, "")[[1]][random_nucleotide_number]
+      change_to= sample (c("A", "G", "T", "C")[!c("A", "G", "T", "C")%in% c(random_nucleotide)], size=1 , replace= TRUE)
+      altered_read= replaceLetterAt(DNAString(read), c(random_nucleotide_number), change_to)
+      read_vector = c(read_vector, altered_read)
+    }
+    random_reads= DNAStringSet(read_vector)
+    return(random_reads)}
+  else { print ("Please enter the correct inputs: genome_name (DNAStringSet object of length 1), read_length (integer), number_of_reads (integer)")}
+}
+
+```
+
+```{r}
+sequenced_reads_with_errors = sequenceGenome_withErrors(chr22genome, 10, 20)
+sequenced_reads_with_errors
+```
+
+
+
+```{r}
+sessionInfo()
+```

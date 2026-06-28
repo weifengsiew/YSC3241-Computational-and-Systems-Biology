@@ -1,0 +1,117 @@
+---
+title: "ProblemSet1"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Problem Set 1
+
+Week I: Introduction to Computational Biology / Molecular Biology
+
+## Question 1
+
+__Read in the table of human chromosome sizes (hg38_sizes.txt), and plot a barplot of their sizes in Mb (megabases).__ (1 mark)
+```{r question1}
+hg38_sizes <- read.table("../data/problem-set-1/hg38_sizes.txt", quote="\"", comment.char="")
+barplot(V2/1000000 ~ V1,
+        data= hg38_sizes,
+        las = 2,
+        cex.names = 0.7,
+        main = "Human Chromosome Sizes",
+        xlab = "Chromosome",
+        ylab = "Chromosome Size (Mb)",
+        ylim= c(0,300))
+```
+
+Make sure you can read all of the chromosome names.
+
+## Question 2
+
+The file orf_coding.fasta contains the open reading frames in the yeast genome. Take the time to investigate what an open reading frame is 
+
+__Plot a histogram of the size of the all of the orfs in the yeast genome and calculate the mean and median ORF size.__ (2 marks)
+```{r question 2a}
+library(Biostrings)
+getwd() #get working directory #which folder is it accessing?
+setwd("../data/problem-set-1") #set working directory #access this folder
+yeast_orf= readDNAStringSet("orf_coding.fasta")
+
+hist(nchar(yeast_orf),
+     main = "Size of open reading frames in the yeast genome",
+     col = "blue",
+     ylim= c(0,2500),
+     xlab= "Size (Mb)")
+
+#mean ORF size
+mean(nchar(yeast_orf))
+
+#median ORF size
+median(nchar(yeast_orf))
+```
+mean ORF size = 1485.306 Mb
+median ORF size= 1218 Mb
+
+__Do you think mean or median is a better way of representing the average ORF size (and why)?__ (1 mark)
+
+```{r question 2b, eval=FALSE}
+
+```
+
+median is a better way of representing the average ORF size. this is because, as seen from the histogram, the distribution of ORF sizes is right-skewed, thus extremely large but rare ORF sizes will significantly affect the mean, but not the median.
+
+### Question 3 
+
+__Calculate the percentage of Gs and Cs for each ORF (this is called GC content) . How many ORFs have GC content greater than 50%?__ (2 marks)
+```{r question3}
+yeast_orf_ATGC<- letterFrequency(yeast_orf, c("A", "T", "G", "C"))
+
+yeast_orf_GCcontent<- (yeast_orf_ATGC[,"G"]+ yeast_orf_ATGC[,"C"])/ (yeast_orf_ATGC[,"A"] + yeast_orf_ATGC[,"T"]+ yeast_orf_ATGC[,"G"]+ yeast_orf_ATGC[,"C"])*100
+
+sum(yeast_orf_GCcontent>50)
+```
+78ORFs have GC content greater than 50%
+
+### Question 4
+__So all of these DNA sequences encode for potential proteins, transcribe all of these DNA sequences into RNA.__ (1 marks)
+```{r question 4a}
+RNAStringSet(yeast_orf) #transcribe DNA sequences into RNA
+```
+
+__So all of these DNA sequences encode for potential proteins, translate all of these DNA sequences into Protein.__ (1 mark)
+```{r question 4b}
+translate(yeast_orf) #translate DNA sequences into protein
+```
+
+### Question 5 
+__Plot the distribution of amino acid usage of all yeast ORFs ... (i.e how many times is each individual amino acid encoded - you do not need to include STOP codons).__ (2 marks)
+
+```{r question5}
+yeast_aa_strings <- translate(yeast_orf) #store amino acid sequences of proteins
+
+aa_list<- c("F","L","S","Y","C","W","P","H","Q","R","I","M","T","N","K","V","A","D","E","G") #store list of amino acids
+aa_count_prot <- letterFrequency(yeast_aa_strings, aa_list) #create matrix to store the amino acid count of each protein
+aa_count_prot<- as.data.frame(aa_count_prot) #convert matrix into dataframe
+
+aa_count_total= c()
+for( i in 1:ncol(aa_count_prot) ){
+	  aa_count_total= c(aa_count_total,sum(aa_count_prot[,i]))
+} #find the total number of each amino acid
+
+barplot(aa_count_total,
+        names.arg = aa_list,
+        main= "Amino acid usage of all yeast ORFs",
+        xlab= "Amino acid",
+        ylab= "Frequency",
+        ylim= c(0,300000),
+        cex.names = 0.6)
+```
+
+
+```{r}
+sessionInfo()
+```

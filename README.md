@@ -28,8 +28,8 @@ This repository contains original solutions to problem sets and projects from YS
 | `ProblemSet4.Rmd` | Genome annotation. Characterisation of genomic regions such as promoters and their overlap with CpG islands and other repeat elements. Application of hidden markov models to model the genome as a sequence of "observable" events (like DNA bases A, T, C, G) that depend on "hidden" underlying states (like exons, introns, or promoters).| Genome annotation |
 | `ProblemSet5.Rmd` | Genome annotation. Characterisation of protein-coding regions, with a focus on exons and GC content. | Genome annotation |
 | `ProblemSet6.Rmd` | Genetic variation. Identification of genomic variants (SNPs) significantly associated with a trait (case vs control) in a simulated genome-wide association study (GWAS). Interpretation of genomic variants by variant-to-gene and gene-to-trait mapping. | GWAS and variant interpretation |
-| `ProblemSet7.Rmd` | RNA Sequencing. RNA-Seq experiment design. Exploration of genome annotation file formats (gtf). Characterization of RNA-Seq raw counts data.| RNA-seq experiments|
-| `ProblemSet8.Rmd` | Processing of RNA-Seq raw counts data. Plots for comparison of biological and technical replicates in RNA-Seq experiments.| RNA-seq data processing |
+| `ProblemSet7.Rmd` | RNA Sequencing. RNA-Seq experiment design. Exploration of genome annotation file formats (gtf). Characterization of RNA-Seq raw counts data.| Bulk RNA-seq experiments|
+| `ProblemSet8.Rmd` | Processing of RNA-Seq raw counts data. Plots for comparison of biological and technical replicates in RNA-Seq experiments.| Bulk RNA-seq data processing |
 | `Project2.Rmd` | Bulk RNA-Seq data analysis. RNA seq data quality control, data processing, differential expression analysis, expression-pattern clustering, and GO over-representation analysis to interpret transcriptional programs involved in neural development.| Bulk RNA-seq data analysis |
 
 ## 4. R Dependencies

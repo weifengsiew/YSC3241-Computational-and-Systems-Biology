@@ -29,8 +29,8 @@ This repository contains original solutions to problem sets and projects from YS
 | `ProblemSet5.Rmd` | Genome annotation. Characterisation of protein-coding regions, with a focus on exons and GC content. | Genome annotation. |
 | `ProblemSet6.Rmd` | Genetic variation. Identification of genomic variants (SNPs) significantly associated with a trait (case vs control) in a simulated genome-wide association study (GWAS). Interpretation of genomic variants by variant-to-gene and gene-to-trait mapping. | GWAS ; Variant interpretation |
 | `ProblemSet7.Rmd` | RNA Sequencing. RNA-Seq experiment design. Exploration of genome annotation file formats (gtf). Characterization of RNA-Seq raw counts data.| RNA-seq experiments|
-| `ProblemSet8.Rmd` | Processing of RNA-Seq raw counts data. Plots for comparing of biological and technical replicates in RNA-Seq experiments.| RNA-seq data processing and replicates comparison. |
-| `Project2.Rmd` | Bulk RNA-Seq data analysis. Quality control, RNA seq counts data processing, differential expression analysis, expression-pattern clustering, and GO over-representation analysis to interpret transcriptional programs involved in neural development.| Bulk RNA-seq data analysis; differential gene-expression analysis; functional enrichment analysis |
+| `ProblemSet8.Rmd` | Processing of RNA-Seq raw counts data. Plots for comparison of biological and technical replicates in RNA-Seq experiments.| RNA-seq data processing and replicates assessment. |
+| `Project2.Rmd` | Bulk RNA-Seq data analysis. RNA seq data quality control, data processing, differential expression analysis, expression-pattern clustering, and GO over-representation analysis to interpret transcriptional programs involved in neural development.| Bulk RNA-seq data analysis |
 
 ## 4. R Dependencies
 
